@@ -28,10 +28,9 @@ import re
 import socket
 import threading
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
-import urllib.error
-
 
 DEFAULT_TIMEOUT = 60.0
 MAX_TIMEOUT = 24 * 60 * 60.0       # a day; more than that is a typo

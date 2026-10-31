@@ -229,9 +229,7 @@ def _count(kind: str, want) -> int:
     number = None
     if isinstance(want, bool) or want is None:
         pass
-    elif isinstance(want, int):
-        number = int(want)
-    elif isinstance(want, float) and want.is_integer():
+    elif isinstance(want, int) or isinstance(want, float) and want.is_integer():
         number = int(want)
     elif isinstance(want, str) and re.fullmatch(r"[0-9]+", want.strip()):
         number = int(want.strip())
@@ -350,8 +348,8 @@ def evaluate(assertion: dict, output: str) -> tuple[bool, str]:
             return (True, "valid JSON") if problem is None else \
                 (False, f"invalid JSON: {problem}")
         return (True, "not JSON, as required") if problem is not None else \
-            (False, "valid JSON, but json_valid: false asks for text that "
-                    "is not")
+            (False, ("valid JSON, but json_valid: false asks for text that "
+                     "is not"))
     if kind == "schema":
         check_schema(want)
         try:

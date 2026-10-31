@@ -37,7 +37,7 @@ from . import model as model_mod
 from . import runner as runner_mod
 from . import suite as suite_mod
 
-VERSION = "0.1.3"
+VERSION = "0.1.4"
 
 
 def _harden_streams() -> None:

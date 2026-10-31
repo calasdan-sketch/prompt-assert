@@ -16,10 +16,11 @@ Maps prompt substrings -> canned responses. Run in a thread:
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from typing import ClassVar
 
 
 class _Handler(BaseHTTPRequestHandler):
-    routes: dict[str, str] = {}
+    routes: ClassVar[dict[str, str]] = {}
     default = "ok"
 
     def do_POST(self):
