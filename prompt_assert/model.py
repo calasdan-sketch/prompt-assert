@@ -4,13 +4,13 @@ Zero dependencies. Works with Ollama, LM Studio, freellmapi, OpenAI,
 or any OpenAI-compatible endpoint.
 
 Config (env or flags):
-  PROMPTREGRESS_BASE_URL  default http://localhost:11434/v1 (Ollama)
-  PROMPTREGRESS_API_KEY   default "ollama" (Ollama needs none)
-  PROMPTREGRESS_MODEL     default llama3.1
-  PROMPTREGRESS_TIMEOUT   default 60 (seconds for one request, from connecting
+  PROMPT_ASSERT_BASE_URL  default http://localhost:11434/v1 (Ollama)
+  PROMPT_ASSERT_API_KEY   default "ollama" (Ollama needs none)
+  PROMPT_ASSERT_MODEL     default llama3.1
+  PROMPT_ASSERT_TIMEOUT   default 60 (seconds for one request, from connecting
                           to the last byte of the reply: a deadline, not a
                           limit per read; --timeout)
-  PROMPTREGRESS_MAX_REPLY_BYTES
+  PROMPT_ASSERT_MAX_REPLY_BYTES
                           default 8388608 (the largest reply body accepted;
                           --max-reply-bytes)
 
@@ -37,7 +37,7 @@ MAX_TIMEOUT = 24 * 60 * 60.0       # a day; more than that is a typo
 DEFAULT_MAX_REPLY_BYTES = 8 * 1024 * 1024
 MAX_REPLY_LIMIT = 1 << 30          # a GiB; more is a typo (and read(n) takes
                                    # a C ssize_t)
-WORKER_NAME = "promptregress-request"
+WORKER_NAME = "prompt-assert-request"
 
 
 class ModelError(RuntimeError):
@@ -83,11 +83,11 @@ _SECRET_MIN_LEN = 8
 
 
 def resolve_api_key(api_key=None) -> str:
-    """The key to use: the flag, else PROMPTREGRESS_API_KEY, else the
+    """The key to use: the flag, else PROMPT_ASSERT_API_KEY, else the
     placeholder. Surrounding whitespace is dropped (a key copied from a file
     or `echo`ed into a secret ends in a newline) and a blank value counts as
     not set."""
-    for value in (api_key, os.environ.get("PROMPTREGRESS_API_KEY")):
+    for value in (api_key, env_get("PROMPT_ASSERT_API_KEY")):
         if isinstance(value, str) and value.strip():
             return value.strip()
     return DEFAULT_API_KEY
@@ -98,7 +98,7 @@ def check_key(key: str) -> None:
     message says what is wrong and never contains any part of the key."""
     if not _KEY_OK.fullmatch(key):
         raise ModelError(
-            "the API key (--api-key / PROMPTREGRESS_API_KEY) cannot be "
+            "the API key (--api-key / PROMPT_ASSERT_API_KEY) cannot be "
             "used: it contains a line break, a control character or a "
             "character that is not plain ASCII, which cannot go into an "
             "HTTP header (the key is not shown). Check where it was copied "
@@ -140,12 +140,22 @@ def parse_byte_limit(value) -> int:
     return number
 
 
+def env_get(name: str):
+    """os.environ[name], else the same setting under its pre-0.2 name
+    (PROMPT_ASSERT_X falls back to PROMPTREGRESS_X) so existing setups
+    keep working."""
+    value = os.environ.get(name)
+    if value is None and name.startswith("PROMPT_ASSERT_"):
+        value = os.environ.get("PROMPTREGRESS_" + name[len("PROMPT_ASSERT_"):])
+    return value
+
+
 def _setting(value, env_name: str, default, parse, name: str):
     """The setting: `value` if given, else the environment variable, else
     `default`. A bad value is a ModelError that names where it came from."""
     source = name
     if value is None:
-        raw = os.environ.get(env_name)
+        raw = env_get(env_name)
         if raw is None or not raw.strip():
             return default
         value, source = raw, env_name
@@ -157,15 +167,15 @@ def _setting(value, env_name: str, default, parse, name: str):
 
 def resolve_timeout(timeout=None) -> float:
     """The deadline for one request: the argument, else
-    PROMPTREGRESS_TIMEOUT, else DEFAULT_TIMEOUT."""
-    return _setting(timeout, "PROMPTREGRESS_TIMEOUT", DEFAULT_TIMEOUT,
+    PROMPT_ASSERT_TIMEOUT, else DEFAULT_TIMEOUT."""
+    return _setting(timeout, "PROMPT_ASSERT_TIMEOUT", DEFAULT_TIMEOUT,
                     parse_seconds, "timeout")
 
 
 def resolve_max_reply_bytes(limit=None) -> int:
     """The largest reply body accepted: the argument, else
-    PROMPTREGRESS_MAX_REPLY_BYTES, else DEFAULT_MAX_REPLY_BYTES."""
-    return _setting(limit, "PROMPTREGRESS_MAX_REPLY_BYTES",
+    PROMPT_ASSERT_MAX_REPLY_BYTES, else DEFAULT_MAX_REPLY_BYTES."""
+    return _setting(limit, "PROMPT_ASSERT_MAX_REPLY_BYTES",
                     DEFAULT_MAX_REPLY_BYTES, parse_byte_limit,
                     "max_reply_bytes")
 
@@ -173,8 +183,8 @@ def resolve_max_reply_bytes(limit=None) -> int:
 def endpoint(base_url=None, model=None) -> tuple[str, str]:
     """(model, base_url) with the environment's defaults applied: who will
     answer."""
-    return (model or os.environ.get("PROMPTREGRESS_MODEL") or "llama3.1",
-            (base_url or os.environ.get("PROMPTREGRESS_BASE_URL")
+    return (model or env_get("PROMPT_ASSERT_MODEL") or "llama3.1",
+            (base_url or env_get("PROMPT_ASSERT_BASE_URL")
              or "http://localhost:11434/v1").rstrip("/"))
 
 
@@ -297,8 +307,8 @@ def _redirect_message(err: urllib.error.HTTPError, base: str,
         return None
     return (f"model at {base} redirected the request to "
             f"{_shown_url(location, request_url)} (HTTP {err.code}); the API "
-            f"key was not sent there. promptregress does not follow "
-            f"redirects - point --base-url / PROMPTREGRESS_BASE_URL at the "
+            f"key was not sent there. prompt-assert does not follow "
+            f"redirects - point --base-url / PROMPT_ASSERT_BASE_URL at the "
             f"new address (what comes before /chat/completions)")
 
 
@@ -414,14 +424,14 @@ def _timed_out(cfg: dict) -> ModelError:
     return ModelError(
         f"model at {cfg['base_url']} timed out after "
         f"{_fmt_seconds(cfg['timeout'])} (raise it with --timeout / "
-        f"PROMPTREGRESS_TIMEOUT)")
+        f"PROMPT_ASSERT_TIMEOUT)")
 
 
 def _too_big(cfg: dict) -> ModelError:
     return ModelError(
         f"model at {cfg['base_url']} sent a reply larger than the "
         f"{cfg['max_reply_bytes']} bytes allowed (raise the limit with "
-        f"--max-reply-bytes / PROMPTREGRESS_MAX_REPLY_BYTES if the model "
+        f"--max-reply-bytes / PROMPT_ASSERT_MAX_REPLY_BYTES if the model "
         f"really answers that much)")
 
 
@@ -449,9 +459,9 @@ def complete(prompt: str, *, base_url=None, api_key=None, model=None,
              max_reply_bytes: int | None = None) -> str:
     """One chat completion, within `timeout` seconds in all - from connecting
     to the last byte of the reply, however slowly the server sends it
-    (default PROMPTREGRESS_TIMEOUT or 60): a hung endpoint fails one request,
+    (default PROMPT_ASSERT_TIMEOUT or 60): a hung endpoint fails one request,
     not the whole suite times 120 s. A reply of more than `max_reply_bytes`
-    (default PROMPTREGRESS_MAX_REPLY_BYTES or 8 MiB) is an error; it is never
+    (default PROMPT_ASSERT_MAX_REPLY_BYTES or 8 MiB) is an error; it is never
     read into memory.
 
     Returns the answer text. Everything else that can come back (an HTTP
@@ -507,7 +517,7 @@ def _complete(prompt: str, cfg: dict, temperature: float, gate: _Gate) -> str:
     except urllib.error.URLError as e:
         raise ModelError(
             f"model unreachable at {cfg['base_url']}: {e.reason} "
-            f"(set PROMPTREGRESS_BASE_URL / --base-url)")
+            f"(set PROMPT_ASSERT_BASE_URL / --base-url)")
     except TimeoutError:  # a read timeout is raised bare, not as URLError
         raise _timed_out(cfg)
     except http.client.IncompleteRead as e:

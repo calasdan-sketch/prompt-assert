@@ -9,7 +9,7 @@ import sys
 import unittest
 from unittest import mock
 
-from promptregress import cli as cli_mod
+from prompt_assert import cli as cli_mod
 
 
 class TestHardenStreams(unittest.TestCase):

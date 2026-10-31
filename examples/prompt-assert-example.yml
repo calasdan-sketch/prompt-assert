@@ -1,15 +1,15 @@
-# Copy this file into your repo's .github/workflows/ to run promptregress
+# Copy this file into your repo's .github/workflows/ to run prompt-assert
 # on every push and pull request.
 #
 # It uses --demo, so CI never needs a live model or API key. Demo mode
 # answers with a built-in fake model that only knows the example
-# `sentiment` prompt scaffolded by `promptregress init` (it is scaffolded
+# `sentiment` prompt scaffolded by `prompt-assert init` (it is scaffolded
 # into a temp dir if your repo has none), so this checks the install and
 # wiring - not your own prompts' quality.
 #
 # To gate on your real prompts, add repo secrets for a model the runner
 # can reach and use the commented step instead.
-name: promptregress (example)
+name: prompt-assert (example)
 
 on:
   push:
@@ -23,17 +23,17 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install promptregress (stdlib only, no other dependencies)
+      - name: Install prompt-assert (stdlib only, no other dependencies)
         run: pip install git+https://github.com/calasdan-sketch/promptregress
       - name: Prompt regression tests (demo mode, fake model)
-        run: promptregress --demo run --prompt sentiment --version v1
+        run: prompt-assert --demo run --prompt sentiment --version v1
       # Real model instead of the demo: every prompt x every version in one
       # go (exit 1 = a case failed, exit 2 = model unreachable / bad cases
       # file; the first unanswered case stops the run, --timeout caps each
       # request):
       # - name: Prompt regression tests
       #   env:
-      #     PROMPTREGRESS_BASE_URL: ${{ secrets.PROMPTREGRESS_BASE_URL }}
-      #     PROMPTREGRESS_API_KEY: ${{ secrets.PROMPTREGRESS_API_KEY }}
-      #     PROMPTREGRESS_MODEL: llama3.1
-      #   run: promptregress run --all --no-cache --timeout 60
+      #     PROMPT_ASSERT_BASE_URL: ${{ secrets.PROMPT_ASSERT_BASE_URL }}
+      #     PROMPT_ASSERT_API_KEY: ${{ secrets.PROMPT_ASSERT_API_KEY }}
+      #     PROMPT_ASSERT_MODEL: llama3.1
+      #   run: prompt-assert run --all --no-cache --timeout 60

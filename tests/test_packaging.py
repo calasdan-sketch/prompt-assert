@@ -65,7 +65,7 @@ class TestPythonVersionClaims(unittest.TestCase):
                          f"README's CI sentence {show(versions(ci_text))} "
                          f"vs ci.yml {show(in_ci)}")
         example = re.search(r'python-version:\s*"(3\.\d+)"',
-                            read("examples", "promptregress-example.yml"))
+                            read("examples", "prompt-assert-example.yml"))
         self.assertTrue(example)
         self.assertLessEqual(versions(example.group(1)), classified)
 
@@ -102,9 +102,13 @@ class TestPackagingMetadata(unittest.TestCase):
         self.assertEqual(project["urls"]["Homepage"], REPO_URL)
         self.assertEqual(project["urls"]["Issues"], REPO_URL + "/issues")
         # the console script points at a real callable
-        module, _, attr = project["scripts"]["promptregress"].partition(":")
-        self.assertTrue(callable(getattr(importlib.import_module(module),
-                                         attr)))
+        for script in ("prompt-assert", "promptregress"):  # new + old alias
+            module, _, attr = project["scripts"][script].partition(":")
+            self.assertEqual(module, "prompt_assert.cli")
+            self.assertTrue(callable(getattr(importlib.import_module(module),
+                                             attr)))
+        self.assertEqual(project["name"], "prompt-assert")
+        self.assertEqual(project["version"], "0.2.0")
 
 
 class TestSourceDistribution(unittest.TestCase):
@@ -115,7 +119,7 @@ class TestSourceDistribution(unittest.TestCase):
 
     #: files the test suite opens that are not in an sdist by default
     READ_BY_THE_TESTS = (".github/workflows/ci.yml",
-                         "examples/promptregress-example.yml")
+                         "examples/prompt-assert-example.yml")
 
     def manifest(self):
         lines = (ln.strip() for ln in read("MANIFEST.in").splitlines())

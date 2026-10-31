@@ -3,13 +3,13 @@
 In-process stand-in for a real model: maps prompt substrings -> canned
 responses, served over HTTP on localhost. Used two ways:
 
-  - tests:  from promptregress.demo import start_fake_model
-  - --demo: promptregress --demo run ...  (zero-dependency trial)
+  - tests:  from prompt_assert.demo import start_fake_model
+  - --demo: prompt-assert --demo run ...  (zero-dependency trial)
 
 Maps prompt substrings -> canned responses. Run in a thread:
 
     server, url = start_fake_model({"hello": "world"})
-    ... PROMPTREGRESS_BASE_URL=url ...
+    ... PROMPT_ASSERT_BASE_URL=url ...
     server.shutdown()
 """
 
@@ -60,7 +60,7 @@ def start_fake_model(routes: dict[str, str], default: str = "ok"):
     return server, url
 
 
-# Routes matching the example scaffolded by `promptregress init`
+# Routes matching the example scaffolded by `prompt-assert init`
 # (first matching key wins). v1 answers every case in one word; v2 — the
 # reworded prompt — starts chatting on the neutral review, so `--demo diff
 # v1 v2` and `--demo run --version v2` show the regression the README

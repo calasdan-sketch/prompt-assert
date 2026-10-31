@@ -24,13 +24,13 @@ from contextlib import redirect_stderr, redirect_stdout
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from unittest import mock
 
-from promptregress import asserts as asserts_mod
-from promptregress import cli as cli_mod
-from promptregress import miniyaml as miniyaml_mod
-from promptregress import model as model_mod
-from promptregress import runner as runner_mod
-from promptregress import suite as suite_mod
-from promptregress.demo import start_fake_model
+from prompt_assert import asserts as asserts_mod
+from prompt_assert import cli as cli_mod
+from prompt_assert import miniyaml as miniyaml_mod
+from prompt_assert import model as model_mod
+from prompt_assert import runner as runner_mod
+from prompt_assert import suite as suite_mod
+from prompt_assert.demo import start_fake_model
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PROMPT = "Classify: {{input}}\n"
@@ -54,10 +54,10 @@ def make_project(cases_text, prompt=PROMPT, name="s", version="v1"):
 
 @contextlib.contextmanager
 def clean_env(**extra):
-    """The process environment without any PROMPTREGRESS_* setting (a real
+    """The process environment without any PROMPT_ASSERT_* setting (a real
     one on the machine running the tests must not leak in), plus `extra`."""
     env = {k: v for k, v in os.environ.items()
-           if not k.startswith("PROMPTREGRESS_")}
+           if not k.startswith(("PROMPT_ASSERT_", "PROMPTREGRESS_"))}
     env.update(extra)
     with mock.patch.dict(os.environ, env, clear=True):
         yield
@@ -224,7 +224,7 @@ def bearer(requests):
 class TestKeyWhitespaceAndShape(unittest.TestCase):
     """A key ending in CR or LF (copied from a file, `echo`ed into a
     secret) crashed http.client with `Invalid header value b'Bearer sk-...'`
-    - and promptregress printed that, key included, on stderr."""
+    - and prompt-assert printed that, key included, on stderr."""
 
     def test_surrounding_whitespace_is_dropped_from_the_key(self):
         server, url, seen = start_recorder()
@@ -238,7 +238,7 @@ class TestKeyWhitespaceAndShape(unittest.TestCase):
                     self.assertEqual(out, "bar")
                     self.assertEqual(bearer(seen), ["Bearer " + KEY])
                     # the same key from the environment
-                    with clean_env(PROMPTREGRESS_API_KEY=raw):
+                    with clean_env(PROMPT_ASSERT_API_KEY=raw):
                         model_mod.complete("hi", base_url=url, model="m",
                                            timeout=5)
                     self.assertEqual(bearer(seen), ["Bearer " + KEY] * 2)
@@ -264,7 +264,7 @@ class TestKeyWhitespaceAndShape(unittest.TestCase):
                     "      - contains: bar\n"),
                  "--base-url", url, "run", "--prompt", "s", "--version", "v1",
                  "--no-cache", "--api-key", KEY + "\n"],
-                PROMPTREGRESS_API_KEY="sk-from-the-environment")
+                PROMPT_ASSERT_API_KEY="sk-from-the-environment")
         finally:
             stop(server)
         self.assertEqual(code, 0, err)
@@ -295,7 +295,7 @@ class TestKeyWhitespaceAndShape(unittest.TestCase):
                             "--prompt", "s", "--version", "v1", "--no-cache"]
                     for how, args, env in (("flag", ["--api-key", key], {}),
                                            ("env", [], {
-                                               "PROMPTREGRESS_API_KEY": key})):
+                                               "PROMPT_ASSERT_API_KEY": key})):
                         if how == "env" and "\x00" in key:
                             continue  # an environment cannot hold a NUL
                         code, out, err = run_cli(argv + args, **env)
@@ -313,7 +313,7 @@ class TestKeyWhitespaceAndShape(unittest.TestCase):
         root = tempfile.mkdtemp()
         code, out, err = run_cli(["--root", root, "--demo", "run", "--prompt",
                                   "sentiment", "--version", "v1"],
-                                 PROMPTREGRESS_API_KEY="line\nbreak")
+                                 PROMPT_ASSERT_API_KEY="line\nbreak")
         self.assertEqual(code, 0, err)
         self.assertIn("3/3 passed", out)
 
@@ -423,7 +423,7 @@ class TestKeyIsNotSentToAnotherAddress(unittest.TestCase):
             code, out, err = run_cli(
                 ["--root", root, "--base-url", first_url, "run", "--prompt",
                  "s", "--version", "v1", "--no-cache"],
-                PROMPTREGRESS_API_KEY=KEY)
+                PROMPT_ASSERT_API_KEY=KEY)
         finally:
             stop(first)
             stop(other)
@@ -1231,7 +1231,7 @@ GOOD_BODY = b'{"choices":[{"message":{"content":"hi"}}]}'
 
 def request_threads():
     return [t for t in threading.enumerate()
-            if t.name == "promptregress-request"]
+            if t.name == "prompt-assert-request"]
 
 
 class TestTimeoutIsADeadline(unittest.TestCase):
@@ -1338,7 +1338,7 @@ class TestReplySizeIsLimited(unittest.TestCase):
             stop()
         self.assertIn("larger than the 1000 bytes allowed", msg)
         self.assertIn("--max-reply-bytes", msg)
-        self.assertIn("PROMPTREGRESS_MAX_REPLY_BYTES", msg)
+        self.assertIn("PROMPT_ASSERT_MAX_REPLY_BYTES", msg)
 
     def test_the_limit_is_the_size_that_is_still_fine(self):
         stop, url = start_scripted(
@@ -1433,11 +1433,11 @@ class TestReplySizeIsLimited(unittest.TestCase):
             code, out, err = run_cli(base + ["--max-reply-bytes", "100"])
             self.assertEqual(code, 2, (out, err))
             self.assertIn("larger than the 100 bytes allowed", err)
-            code, out, err = run_cli(base, PROMPTREGRESS_MAX_REPLY_BYTES="100")
+            code, out, err = run_cli(base, PROMPT_ASSERT_MAX_REPLY_BYTES="100")
             self.assertEqual(code, 2, (out, err))
             self.assertIn("larger than the 100 bytes allowed", err)
             code, out, err = run_cli(base + ["--max-reply-bytes", "100000"],
-                                     PROMPTREGRESS_MAX_REPLY_BYTES="100")
+                                     PROMPT_ASSERT_MAX_REPLY_BYTES="100")
             self.assertEqual(code, 0, (out, err))     # the flag wins
         finally:
             stop(server)
@@ -1509,11 +1509,11 @@ class TestTimeAndSizeSettings(unittest.TestCase):
         try:
             base = ["--root", root, "--base-url", url, "run", "--prompt", "s",
                     "--version", "v1", "--no-cache"]
-            for name, value in (("PROMPTREGRESS_TIMEOUT", "abc"),
-                                ("PROMPTREGRESS_TIMEOUT", "0"),
-                                ("PROMPTREGRESS_TIMEOUT", "nan"),
-                                ("PROMPTREGRESS_MAX_REPLY_BYTES", "big"),
-                                ("PROMPTREGRESS_MAX_REPLY_BYTES", "0")):
+            for name, value in (("PROMPT_ASSERT_TIMEOUT", "abc"),
+                                ("PROMPT_ASSERT_TIMEOUT", "0"),
+                                ("PROMPT_ASSERT_TIMEOUT", "nan"),
+                                ("PROMPT_ASSERT_MAX_REPLY_BYTES", "big"),
+                                ("PROMPT_ASSERT_MAX_REPLY_BYTES", "0")):
                 with self.subTest(name + "=" + value):
                     code, out, err = run_cli(base, **{name: value})
                     self.assertEqual(code, 2, (out, err))
@@ -1522,20 +1522,20 @@ class TestTimeAndSizeSettings(unittest.TestCase):
                     self.assertIn(repr(value), err)
             self.assertEqual(seen, [])
             # empty is not set; the demo does not care what the environment says
-            code, out, err = run_cli(base, PROMPTREGRESS_TIMEOUT="",
-                                     PROMPTREGRESS_MAX_REPLY_BYTES=" ")
+            code, out, err = run_cli(base, PROMPT_ASSERT_TIMEOUT="",
+                                     PROMPT_ASSERT_MAX_REPLY_BYTES=" ")
             self.assertEqual(code, 0, (out, err))
             code, out, err = run_cli(
                 ["--root", root, "--demo", "run", "--prompt", "sentiment",
                  "--version", "v1", "--no-cache"],
-                PROMPTREGRESS_TIMEOUT="abc")
+                PROMPT_ASSERT_TIMEOUT="abc")
             self.assertEqual(code, 0, (out, err))
         finally:
             stop(server)
 
     def test_the_environment_sets_the_defaults(self):
-        with clean_env(PROMPTREGRESS_TIMEOUT="7",
-                       PROMPTREGRESS_MAX_REPLY_BYTES="4096"):
+        with clean_env(PROMPT_ASSERT_TIMEOUT="7",
+                       PROMPT_ASSERT_MAX_REPLY_BYTES="4096"):
             cfg = model_mod._cfg()
             self.assertEqual((cfg["timeout"], cfg["max_reply_bytes"]),
                              (7.0, 4096))
@@ -1609,7 +1609,7 @@ class TestTheKeyGoesInOneHeader(unittest.TestCase):
             self.assertEqual(len(seen), 6)
             code, out, err = run_cli(
                 ["--root", root, "--base-url", url, "run", "--all",
-                 "--no-cache"], PROMPTREGRESS_API_KEY=KEY)
+                 "--no-cache"], PROMPT_ASSERT_API_KEY=KEY)
             self.assertEqual(code, 0, (out, err))
         finally:
             stop(server)
@@ -1705,12 +1705,12 @@ class TestNoCacheMeansNoCache(unittest.TestCase):
         root, seen = self.run_twice("input: hi\nassert:\n  - contains: bar",
                                     "bar")
         self.assertEqual(len(seen), 2)
-        self.assertFalse(os.path.exists(os.path.join(root, ".promptregress")))
+        self.assertFalse(os.path.exists(os.path.join(root, ".prompt-assert")))
 
     def test_judge_verdicts_are_not_written_either(self):
         root, seen = self.run_twice(JUDGED, "PASS")
         self.assertEqual(len(seen), 4)
-        self.assertFalse(os.path.exists(os.path.join(root, ".promptregress")))
+        self.assertFalse(os.path.exists(os.path.join(root, ".prompt-assert")))
 
     def test_what_an_earlier_run_cached_is_not_used(self):
         root = make_project(one_case("input: hi\nassert:\n  - contains: bar"))
@@ -1796,7 +1796,7 @@ class TestVersionsAgree(unittest.TestCase):
                 cli_mod.main(["--version"])
         self.assertEqual(ctx.exception.code, 0)
         self.assertEqual(out.getvalue().strip(),
-                         f"promptregress {cli_mod.VERSION}")
+                         f"prompt-assert {cli_mod.VERSION}")
 
 
 if __name__ == "__main__":

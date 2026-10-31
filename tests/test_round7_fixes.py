@@ -1,6 +1,6 @@
 """Round-7 panel regressions (third verification panel, 2026-10-18).
 
-promptregress: a YAML-only escape in a double-quoted string (\\xE9, \\U0001F600:
+prompt-assert: a YAML-only escape in a double-quoted string (\\xE9, \\U0001F600:
 what PyYAML writes for every accented letter and every emoji) stayed backslash
 text, so the model was asked 'Say: caf\\xE9' and a `not_contains` check passed
 where it had to fail. The README promises that what the parser does not
@@ -23,17 +23,17 @@ from contextlib import redirect_stderr, redirect_stdout
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from unittest import mock
 
-from promptregress import cli as cli_mod
-from promptregress import miniyaml
-from promptregress import suite as suite_mod
+from prompt_assert import cli as cli_mod
+from prompt_assert import miniyaml
+from prompt_assert import suite as suite_mod
 
 
 @contextlib.contextmanager
 def clean_env(**extra):
-    """The process environment without any PROMPTREGRESS_* setting (a real
+    """The process environment without any PROMPT_ASSERT_* setting (a real
     one on the machine running the tests must not leak in), plus `extra`."""
     env = {k: v for k, v in os.environ.items()
-           if not k.startswith("PROMPTREGRESS_")}
+           if not k.startswith(("PROMPT_ASSERT_", "PROMPTREGRESS_"))}
     env.update(extra)
     with mock.patch.dict(os.environ, env, clear=True):
         yield

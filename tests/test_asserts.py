@@ -2,7 +2,7 @@
 
 import unittest
 
-from promptregress import asserts as a
+from prompt_assert import asserts as a
 
 
 class TestBasic(unittest.TestCase):

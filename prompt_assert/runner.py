@@ -1,6 +1,6 @@
 """Runner: execute cases against a prompt version, with caching.
 
-Cache (.promptregress/cache/) is keyed by prompt text + case + model +
+Cache (.prompt-assert/cache/) is keyed by prompt text + case + model +
 provider base URL, so
 `diff v1 v2` never pays for the same call twice and CI re-runs are cheap.
 
@@ -21,11 +21,11 @@ from . import asserts as asserts_mod
 from . import model as model_mod
 from . import suite as suite_mod
 
-CACHE_ROOT = ".promptregress"
+CACHE_ROOT = ".prompt-assert"
 CACHE_DIR = CACHE_ROOT + "/cache"
-# Dropped into .promptregress/ so model outputs never land in a commit;
+# Dropped into .prompt-assert/ so model outputs never land in a commit;
 # the file ignores everything beside itself.
-CACHE_GITIGNORE = ("# promptregress response cache: safe to delete, "
+CACHE_GITIGNORE = ("# prompt-assert response cache: safe to delete, "
                    "never commit\n*\n!.gitignore\n")
 
 
@@ -41,7 +41,7 @@ def error_text(e: BaseException) -> str:
 
 
 def ensure_cache_ignored(root: str) -> bool:
-    """Create .promptregress/.gitignore if missing. True when written.
+    """Create .prompt-assert/.gitignore if missing. True when written.
     Raises OSError when it cannot be written."""
     d = os.path.join(root, CACHE_ROOT)
     p = os.path.join(d, ".gitignore")

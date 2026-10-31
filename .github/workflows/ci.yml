@@ -1,4 +1,4 @@
-# Test suite for promptregress itself: install the package, run the tests.
+# Test suite for prompt-assert itself: install the package, run the tests.
 # Stdlib only, so there is nothing else to install; the tests talk to an
 # in-process fake model, so no API key or network is needed.
 name: ci
@@ -31,4 +31,4 @@ jobs:
       - name: Test
         run: python -m unittest discover -s tests
       - name: Smoke-test the console script
-        run: promptregress --demo run --prompt sentiment --version v1
+        run: prompt-assert --demo run --prompt sentiment --version v1

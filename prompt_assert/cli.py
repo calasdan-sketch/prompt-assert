@@ -1,16 +1,16 @@
-"""promptregress: pytest for prompts, local-first.
+"""prompt-assert: pytest for prompts, local-first.
 
 Prompts are versioned files; golden cases live in YAML. Run them in CI,
 diff versions A/B, and catch prompt drift before your users do.
 
-  python3 -m promptregress init
-  python3 -m promptregress --demo run --prompt sentiment --version v1
-  python3 -m promptregress run --all            # every prompt x every version
-  python3 -m promptregress diff v1 v2 --prompt sentiment
-  python3 -m promptregress list
+  python3 -m prompt_assert init
+  python3 -m prompt_assert --demo run --prompt sentiment --version v1
+  python3 -m prompt_assert run --all            # every prompt x every version
+  python3 -m prompt_assert diff v1 v2 --prompt sentiment
+  python3 -m prompt_assert list
 
 (--demo trials the suite against a built-in fake model; after
-`pip install .` the `promptregress` command is on your PATH.)
+`pip install .` the `prompt-assert` command is on your PATH.)
 
 Exit status: 0 every case passed (or the command is done); 1 a case failed;
 2 usage or configuration error, nothing was judged: a prompt or cases file
@@ -37,7 +37,7 @@ from . import model as model_mod
 from . import runner as runner_mod
 from . import suite as suite_mod
 
-VERSION = "0.1.4"
+VERSION = "0.2.0"
 
 
 def _harden_streams() -> None:
@@ -91,7 +91,7 @@ def _discard_output(stream) -> None:
 class _PipeSafe:
     """Stand-in for sys.stdout / sys.stderr while main() runs.
 
-    The reader of a pipe can quit at any moment (`promptregress run --all
+    The reader of a pipe can quit at any moment (`prompt-assert run --all
     | head -1`). Left alone, Python raises BrokenPipeError out of print()
     or, when the output was still buffered, prints "Exception ignored" at
     exit and replaces the exit code with 120 (see _IS_WINDOWS for how
@@ -224,7 +224,7 @@ def cmd_init(args) -> int:
         print(f"error: init could not write its files: "
               f"{runner_mod.error_text(e)}", file=sys.stderr)
         return 2
-    print("Point PROMPTREGRESS_BASE_URL at your model "
+    print("Point PROMPT_ASSERT_BASE_URL at your model "
           "(default: Ollama at http://localhost:11434/v1).")
     return 0
 
@@ -245,7 +245,7 @@ def _demo_root(args) -> str:
         return args.root
     stack = getattr(args, "cleanup", None) or contextlib.ExitStack()
     tmp = stack.enter_context(tempfile.TemporaryDirectory(
-        prefix="promptregress-demo-", ignore_cleanup_errors=True))
+        prefix="prompt-assert-demo-", ignore_cleanup_errors=True))
     scaffold_example(tmp)
     print(f"(demo: scaffolded example prompts in {tmp}; removed afterwards)",
           file=sys.stderr)
@@ -255,7 +255,7 @@ def _demo_root(args) -> str:
 def cmd_list(args) -> int:
     prompts = suite_mod.list_prompts(args.root)
     if not prompts:
-        print("no prompts found — run `promptregress init`")
+        print("no prompts found — run `prompt-assert init`")
         return 0
     problems = []
     for name, versions in prompts.items():
@@ -372,7 +372,7 @@ def cmd_run(args) -> int:
                    suite_mod.list_prompts(root).items() for v in versions]
         if not targets:
             print(f"error: no prompts found under {root} — run "
-                  f"`promptregress init`", file=sys.stderr)
+                  f"`prompt-assert init`", file=sys.stderr)
             return 2
     else:
         targets = [(args.prompt, args.version)]
@@ -473,11 +473,11 @@ def _add_model_options(p: argparse.ArgumentParser, *, on_subcommand: bool) -> No
     defaults are SUPPRESS, so an unset option there keeps the value parsed
     from the top level instead of clobbering it with None/False."""
     d = argparse.SUPPRESS if on_subcommand else None
-    p.add_argument("--model", default=d, help="Model name (env PROMPTREGRESS_MODEL).")
+    p.add_argument("--model", default=d, help="Model name (env PROMPT_ASSERT_MODEL).")
     p.add_argument("--base-url", default=d,
-                   help="OpenAI-compatible endpoint (env PROMPTREGRESS_BASE_URL).")
+                   help="OpenAI-compatible endpoint (env PROMPT_ASSERT_BASE_URL).")
     p.add_argument("--api-key", default=d,
-                   help="API key (env PROMPTREGRESS_API_KEY is safer: a key "
+                   help="API key (env PROMPT_ASSERT_API_KEY is safer: a key "
                         "on the command line is visible to other users "
                         "via `ps` and shell history).")
     p.add_argument("--timeout", type=_flag(model_mod.parse_seconds),
@@ -486,13 +486,13 @@ def _add_model_options(p: argparse.ArgumentParser, *, on_subcommand: bool) -> No
                         f"the last byte of the reply: a deadline, not a "
                         f"limit per read (default "
                         f"{model_mod.DEFAULT_TIMEOUT:g}; env "
-                        f"PROMPTREGRESS_TIMEOUT). The first case the model "
+                        f"PROMPT_ASSERT_TIMEOUT). The first case the model "
                         f"cannot answer stops the run.")
     p.add_argument("--max-reply-bytes", type=_flag(model_mod.parse_byte_limit),
                    default=d, metavar="N",
                    help=f"Largest reply body accepted, in bytes (default "
                         f"{model_mod.DEFAULT_MAX_REPLY_BYTES}, 8 MiB; env "
-                        f"PROMPTREGRESS_MAX_REPLY_BYTES). A bigger reply is "
+                        f"PROMPT_ASSERT_MAX_REPLY_BYTES). A bigger reply is "
                         f"an error; it is never read into memory.")
     p.add_argument("--demo", action="store_true",
                    default=argparse.SUPPRESS if on_subcommand else False,
@@ -503,11 +503,11 @@ def _add_model_options(p: argparse.ArgumentParser, *, on_subcommand: bool) -> No
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="promptregress", description=__doc__,
+    p = argparse.ArgumentParser(prog="prompt-assert", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--version", action="version", version=f"%(prog)s {VERSION}")
     p.add_argument("--root", default=os.getcwd(),
-                   help="The project folder: prompts/ and .promptregress/ "
+                   help="The project folder: prompts/ and .prompt-assert/ "
                         "are looked for in it (default: the current "
                         "directory). Give it before the subcommand.")
     _add_model_options(p, on_subcommand=False)
@@ -557,15 +557,15 @@ def main(argv=None) -> int:
         args.cleanup = stack
         if args.demo and args.cmd in ("run", "diff"):
             # Zero-dependency trial: ALWAYS the in-process fake model.
-            # A PROMPTREGRESS_BASE_URL left in the environment (or a
+            # A PROMPT_ASSERT_BASE_URL left in the environment (or a
             # --base-url) used to win silently and hit a real server.
             demo_server, url = demo_mod.start_demo_model()
             stack.callback(demo_server.server_close)   # runs after shutdown
             stack.callback(demo_server.shutdown)
             ignored = [f"--base-url {args.base_url}"] if args.base_url else []
-            if os.environ.get("PROMPTREGRESS_BASE_URL"):
-                ignored.append("PROMPTREGRESS_BASE_URL="
-                               f"{os.environ['PROMPTREGRESS_BASE_URL']}")
+            if model_mod.env_get("PROMPT_ASSERT_BASE_URL"):
+                ignored.append("PROMPT_ASSERT_BASE_URL="
+                               f"{model_mod.env_get('PROMPT_ASSERT_BASE_URL')}")
             if ignored:
                 print("(demo: using the built-in fake model; ignoring "
                       f"{', '.join(ignored)})", file=sys.stderr)

@@ -3,8 +3,8 @@ requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "promptregress"
-version = "0.1.4"
+name = "prompt-assert"
+version = "0.2.0"
 description = "Pytest for prompts: catch LLM regressions before your users do."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -31,7 +31,8 @@ Repository = "https://github.com/calasdan-sketch/promptregress"
 Issues = "https://github.com/calasdan-sketch/promptregress/issues"
 
 [project.scripts]
-promptregress = "promptregress.cli:main"
+prompt-assert = "prompt_assert.cli:main"
+promptregress = "prompt_assert.cli:main"  # old name, kept as an alias
 
 [tool.setuptools]
-packages = ["promptregress"]
+packages = ["prompt_assert"]

@@ -4,7 +4,7 @@ prompt-regress against their verbatim miniyaml copies."""
 
 import unittest
 
-from promptregress import miniyaml
+from prompt_assert import miniyaml
 
 
 def _deep(nesting: int) -> str:

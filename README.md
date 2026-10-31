@@ -1,4 +1,6 @@
-# promptregress
+# prompt-assert
+
+*Formerly promptregress.* The old `promptregress` command and `PROMPTREGRESS_*` environment variables still work; the import package is now `prompt_assert`.
 
 `pytest` for prompts, local-first. Prompt drift — not model decay — causes
 most LLM-ops failures. Version your prompts as files, keep golden cases in
@@ -8,7 +10,7 @@ Here is one caught before shipping — `sentiment.v2.txt` reworded the
 classifier and it started chatting instead of answering in one word:
 
 ```
-$ promptregress diff v1 v2 --prompt sentiment
+$ prompt-assert diff v1 v2 --prompt sentiment
 case                v1      v2
 angry review      pass    pass
 happy review      pass    pass
@@ -22,7 +24,7 @@ CHANGED neutral review:
 ```
 
 ```
-$ promptregress run --prompt sentiment --version v2
+$ prompt-assert run --prompt sentiment --version v2
 sentiment.v2: ..F
 
   FAIL neutral review
@@ -50,24 +52,24 @@ git clone https://github.com/calasdan-sketch/promptregress && cd promptregress
 pip install .
 ```
 
-Either way pip puts the `promptregress` command on your PATH, on every OS.
-Or run without installing: `python3 -m promptregress` from the repo root.
+Either way pip puts the `prompt-assert` command on your PATH, on every OS.
+Or run without installing: `python3 -m prompt_assert` from the repo root.
 
 ## Quick start
 
 ```bash
-promptregress init                                       # scaffold prompts/ with an example
-promptregress --demo run --prompt sentiment --version v1 # zero-setup trial, no model needed
-promptregress --demo diff v1 v2 --prompt sentiment       # A/B on the same golden cases
-promptregress run --all                                  # every prompt x every version (CI)
-promptregress list
+prompt-assert init                                       # scaffold prompts/ with an example
+prompt-assert --demo run --prompt sentiment --version v1 # zero-setup trial, no model needed
+prompt-assert --demo diff v1 v2 --prompt sentiment       # A/B on the same golden cases
+prompt-assert run --all                                  # every prompt x every version (CI)
+prompt-assert list
 ```
 
 `--demo` runs the suite against a built-in fake model, so you can trial the
 whole workflow with zero dependencies — no Ollama, no API key. It always
-uses the fake model: a `PROMPTREGRESS_BASE_URL` left in your environment
+uses the fake model: a `PROMPT_ASSERT_BASE_URL` left in your environment
 (or a `--base-url`) is ignored with a notice, never silently hit. Drop the
-flag once `PROMPTREGRESS_BASE_URL` points at your real endpoint (see
+flag once `PROMPT_ASSERT_BASE_URL` points at your real endpoint (see
 below).
 
 The example `sentiment` prompt is a one-word sentiment classifier
@@ -75,11 +77,11 @@ The example `sentiment` prompt is a one-word sentiment classifier
 run prints `sentiment.v1: ...` followed by `3/3 passed`, and `v2` shows the
 regression at the top of this page (the fake model "chats" on the neutral
 review for v2, so `diff v1 v2` flips one verdict and `run --version v2`
-exits 1). `init` also writes `.promptregress/.gitignore`, so the response
+exits 1). `init` also writes `.prompt-assert/.gitignore`, so the response
 cache never ends up in a commit.
 
 (Haven't installed it yet? Prefix every command with `python3 -m`
-from the repo checkout, e.g. `python3 -m promptregress init`.)
+from the repo checkout, e.g. `python3 -m prompt_assert init`.)
 
 ## Layout
 
@@ -87,11 +89,11 @@ from the repo checkout, e.g. `python3 -m promptregress init`.)
 prompts/<name>.v1.txt       prompt version 1 ({{input}} placeholder)
 prompts/<name>.v2.txt       prompt version 2
 prompts/<name>.cases.yaml   golden cases shared across versions
-.promptregress/             response cache (git-ignored by `init`)
+.prompt-assert/             response cache (git-ignored by `init`)
 ```
 
 All of it is looked for in the current directory, or in `--root DIR` (given
-before the subcommand: `promptregress --root path/to/project run --all`).
+before the subcommand: `prompt-assert --root path/to/project run --all`).
 
 ## Golden cases
 
@@ -235,15 +237,15 @@ Zero dependencies — plain stdlib HTTP against any OpenAI-compatible API:
 
 | Env | Default | Notes |
 |---|---|---|
-| `PROMPTREGRESS_BASE_URL` | `http://localhost:11434/v1` | Ollama, LM Studio, freellmapi… |
-| `PROMPTREGRESS_API_KEY` | `ollama` | prefer the env var: a key given as `--api-key` is visible to other users via `ps` and your shell history |
-| `PROMPTREGRESS_MODEL` | `llama3.1` | |
-| `PROMPTREGRESS_TIMEOUT` | `60` | seconds for one request, from connecting to the last byte of the reply: a deadline, however slowly the server sends |
-| `PROMPTREGRESS_MAX_REPLY_BYTES` | `8388608` | the largest reply body accepted (8 MiB); a bigger one is an error and is never read into memory |
+| `PROMPT_ASSERT_BASE_URL` | `http://localhost:11434/v1` | Ollama, LM Studio, freellmapi… |
+| `PROMPT_ASSERT_API_KEY` | `ollama` | prefer the env var: a key given as `--api-key` is visible to other users via `ps` and your shell history |
+| `PROMPT_ASSERT_MODEL` | `llama3.1` | |
+| `PROMPT_ASSERT_TIMEOUT` | `60` | seconds for one request, from connecting to the last byte of the reply: a deadline, however slowly the server sends |
+| `PROMPT_ASSERT_MAX_REPLY_BYTES` | `8388608` | the largest reply body accepted (8 MiB); a bigger one is an error and is never read into memory |
 
 Flags `--model`, `--base-url`, `--api-key`, `--timeout`, `--max-reply-bytes`
 (and `--demo`) override env; they are accepted before or after the subcommand
-(`promptregress --base-url … run …` and `promptregress run … --base-url …`
+(`prompt-assert --base-url … run …` and `prompt-assert run … --base-url …`
 mean the same). Temperature is 0 for determinism.
 
 The API key goes out in one `Authorization: Bearer` header and nowhere
@@ -272,13 +274,13 @@ seconds in all, like one that sends nothing. A reply larger than
 `--max-reply-bytes` is an error too, and a body that announces more is
 refused without being read, so a runaway server cannot fill your memory.
 Both must be positive numbers (`--timeout` at most a day); anything else is
-a usage error, exit 2 - in `PROMPTREGRESS_TIMEOUT` and
-`PROMPTREGRESS_MAX_REPLY_BYTES` as well (a `PROMPTREGRESS_TIMEOUT` that was
+a usage error, exit 2 - in `PROMPT_ASSERT_TIMEOUT` and
+`PROMPT_ASSERT_MAX_REPLY_BYTES` as well (a `PROMPT_ASSERT_TIMEOUT` that was
 not a number used to be ignored without a word).
 
 ## Caching
 
-Responses are cached in `.promptregress/cache/` keyed by prompt text + case
+Responses are cached in `.prompt-assert/cache/` keyed by prompt text + case
 + model + base URL — `diff v1 v2` never pays twice and CI re-runs are cheap,
 and pointing at a different endpoint never reuses another provider's answers.
 LLM-judge verdicts are cached alongside, keyed by prompt version + case +
@@ -291,7 +293,7 @@ cached run), so it stays out of your commits.
 
 The cache only saves money, so it never fails a run. When it cannot be
 written - a read-only or root-owned checkout, a file where
-`.promptregress/cache` belongs, a full disk - the command prints one
+`.prompt-assert/cache` belongs, a full disk - the command prints one
 `warning: cache disabled: ...` line on stderr and carries on without it:
 the same verdicts and exit code, only the next run pays again. Nothing is
 cached while the `.gitignore` cannot be written.
@@ -299,7 +301,7 @@ cached while the `.gitignore` cannot be written.
 ## CI
 
 ```bash
-promptregress run --all            # every prompt against each of its versions
+prompt-assert run --all            # every prompt against each of its versions
 ```
 
 ```
@@ -322,7 +324,7 @@ sentiment.v2  2/3  FAIL
 2 suite(s), 1 with failures; 5/6 cases passed
 ```
 
-A single version is `promptregress run --prompt sentiment --version v2`.
+A single version is `prompt-assert run --prompt sentiment --version v2`.
 `--format json` lists every suite with its cases.
 
 ### Exit codes
@@ -344,19 +346,19 @@ made, flipped verdicts included - the example at the top of this page exits
 regression. Gate a build with `run` (or `run --all`); to act on a flip, read
 `changed` per case in `diff --format json`.
 
-Piping is safe: when the reader quits early (`promptregress run --all |
+Piping is safe: when the reader quits early (`prompt-assert run --all |
 head -5`) the output just stops, with no traceback, and the exit code is
 still the verdict (a failing run exits 1, never a false 0; in a shell
 pipeline `set -o pipefail` lets you see it).
 
 Ready-to-copy GitHub Actions workflow:
-[`examples/promptregress-example.yml`](examples/promptregress-example.yml).
+[`examples/prompt-assert-example.yml`](examples/prompt-assert-example.yml).
 It runs in `--demo` mode only, so CI never depends on a live model — but
 demo mode answers with a fake model that only knows the scaffolded
 `sentiment` example, so it checks the install and wiring, not your
-prompts. To gate on real prompts, point `PROMPTREGRESS_BASE_URL` (and
-`PROMPTREGRESS_API_KEY`) at a model reachable from the runner via repo
-secrets and run `promptregress run --all` without `--demo` (commented step
+prompts. To gate on real prompts, point `PROMPT_ASSERT_BASE_URL` (and
+`PROMPT_ASSERT_API_KEY`) at a model reachable from the runner via repo
+secrets and run `prompt-assert run --all` without `--demo` (commented step
 in the file).
 
 This repo's own CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml))

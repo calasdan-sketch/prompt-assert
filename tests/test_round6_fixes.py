@@ -1,6 +1,6 @@
 """Round-6 panel regressions (second verification panel, 2026-10-18).
 
-promptregress: a cache write or a scaffold write that failed (a read-only or
+prompt-assert: a cache write or a scaffold write that failed (a read-only or
 root-owned workspace, a file where a folder belongs) ended in a traceback with
 exit code 1 - the code the README keeps for "a case failed". Every test here
 uses fake servers on 127.0.0.1 and temp directories, nothing else.
@@ -24,12 +24,12 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from unittest import mock
 
-from promptregress import asserts as asserts_mod
-from promptregress import cli as cli_mod
-from promptregress import miniyaml
-from promptregress import runner as runner_mod
-from promptregress import suite as suite_mod
-from promptregress.demo import start_fake_model
+from prompt_assert import asserts as asserts_mod
+from prompt_assert import cli as cli_mod
+from prompt_assert import miniyaml
+from prompt_assert import runner as runner_mod
+from prompt_assert import suite as suite_mod
+from prompt_assert.demo import start_fake_model
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PROMPT = "Classify: {{input}}\n"
@@ -44,10 +44,10 @@ JUDGED = ("cases:\n  - name: j\n    input: hi\n    assert:\n"
 
 @contextlib.contextmanager
 def clean_env(**extra):
-    """The process environment without any PROMPTREGRESS_* setting (a real
+    """The process environment without any PROMPT_ASSERT_* setting (a real
     one on the machine running the tests must not leak in), plus `extra`."""
     env = {k: v for k, v in os.environ.items()
-           if not k.startswith("PROMPTREGRESS_")}
+           if not k.startswith(("PROMPT_ASSERT_", "PROMPTREGRESS_"))}
     env.update(extra)
     with mock.patch.dict(os.environ, env, clear=True):
         yield
@@ -117,10 +117,10 @@ class WorkDir(unittest.TestCase):
         return url
 
     def block_cache_dir(self, root):
-        """A FILE where .promptregress/cache belongs: creating the folder
+        """A FILE where .prompt-assert/cache belongs: creating the folder
         fails on every platform, for root as well."""
-        os.makedirs(os.path.join(root, ".promptregress"))
-        self.write(os.path.join(root, ".promptregress", "cache"))
+        os.makedirs(os.path.join(root, ".prompt-assert"))
+        self.write(os.path.join(root, ".prompt-assert", "cache"))
 
     @staticmethod
     def tidy(text):
@@ -135,8 +135,8 @@ def lines_of(text):
 # #1 - a cache is an optimisation: it must never fail or crash a run
 
 class TestACacheThatCannotBeWrittenIsSkipped(WorkDir):
-    """A file at `.promptregress/cache` (or a read-only or root-owned
-    `.promptregress`) made `run` and `diff` end in a traceback with exit
+    """A file at `.prompt-assert/cache` (or a read-only or root-owned
+    `.prompt-assert`) made `run` and `diff` end in a traceback with exit
     code 1, the code for "a case failed"."""
 
     def run_in(self, root, *argv):
@@ -160,7 +160,7 @@ class TestACacheThatCannotBeWrittenIsSkipped(WorkDir):
                                      "--version", "v1")
         self.assertEqual(code, 0, (out, err))
         self.assertIn("3/3 passed", out)
-        self.assert_one_warning(err, ".promptregress/cache")
+        self.assert_one_warning(err, ".prompt-assert/cache")
 
     def test_the_answers_are_the_same_as_without_trouble(self):
         # a cache that is switched off changes what is paid, never the verdict
@@ -230,23 +230,23 @@ class TestACacheThatCannotBeWrittenIsSkipped(WorkDir):
 
     def test_a_file_where_the_whole_cache_folder_belongs(self):
         root = self.project()
-        self.write(os.path.join(root, ".promptregress"))     # a FILE
+        self.write(os.path.join(root, ".prompt-assert"))     # a FILE
         code, out, err = self.run_in(root, "run", "--prompt", "s",
                                      "--version", "v1")
         self.assertEqual(code, 0, (out, err))
-        self.assert_one_warning(err, ".promptregress")
+        self.assert_one_warning(err, ".prompt-assert")
 
     def test_a_write_that_is_refused_is_skipped(self):
-        # the portable form of a read-only or root-owned .promptregress: the
+        # the portable form of a read-only or root-owned .prompt-assert: the
         # function that creates the folder fails the way the system words it
         root = self.project()
         refuse = PermissionError(errno.EACCES, "Permission denied",
-                                 os.path.join(root, ".promptregress"))
+                                 os.path.join(root, ".prompt-assert"))
         with mock.patch.object(runner_mod.os, "makedirs", side_effect=refuse):
             code, out, err = self.run_in(root, "run", "--prompt", "s",
                                          "--version", "v1")
         self.assertEqual(code, 0, (out, err))
-        self.assert_one_warning(err, "Permission denied", ".promptregress")
+        self.assert_one_warning(err, "Permission denied", ".prompt-assert")
 
     def test_a_full_disk_is_skipped(self):
         root = self.project(THREE_CASES)
@@ -263,7 +263,7 @@ class TestACacheThatCannotBeWrittenIsSkipped(WorkDir):
         # be written nothing is cached at all
         root = self.project(THREE_CASES)
         refuse = PermissionError(errno.EACCES, "Permission denied",
-                                 os.path.join(root, ".promptregress",
+                                 os.path.join(root, ".prompt-assert",
                                               ".gitignore"))
         with mock.patch.object(runner_mod, "ensure_cache_ignored",
                                side_effect=refuse):
@@ -280,7 +280,7 @@ class TestACacheThatCannotBeWrittenIsSkipped(WorkDir):
                      "root ignores permission bits")
     def test_a_read_only_workspace(self):
         root = self.project()
-        folder = os.path.join(root, ".promptregress")
+        folder = os.path.join(root, ".prompt-assert")
         os.makedirs(folder)
         os.chmod(folder, 0o555)
         self.addCleanup(os.chmod, folder, 0o755)
@@ -326,10 +326,10 @@ class TestACacheThatCannotBeWrittenIsSkipped(WorkDir):
         root = self.project(THREE_CASES)
         self.block_cache_dir(root)
         env = {k: v for k, v in os.environ.items()
-               if not k.startswith("PROMPTREGRESS_")
+               if not k.startswith(("PROMPT_ASSERT_", "PROMPTREGRESS_"))
                and k != "PYTHONUNBUFFERED"}
         proc = subprocess.run(
-            [sys.executable, "-m", "promptregress", "--root", root,
+            [sys.executable, "-m", "prompt_assert", "--root", root,
              "--base-url", self.url, "run", "--prompt", "s", "--version",
              "v1"], cwd=REPO, env=env, capture_output=True, timeout=120)
         out = proc.stdout.decode("utf-8", "replace")
@@ -362,10 +362,10 @@ class TestInitSaysWhatItCouldNotWrite(WorkDir):
 
     def test_a_file_where_the_cache_folder_belongs(self):
         root = self.bare_dir()
-        self.write(os.path.join(root, ".promptregress"))
+        self.write(os.path.join(root, ".prompt-assert"))
         code, out, err = run_cli(["--root", root, "init"])
         self.assertEqual(code, 2, (out, err))
-        self.one_error(err, ".promptregress")
+        self.one_error(err, ".prompt-assert")
         # what could be written was written; a second init finishes the job
         self.assertIn("scaffolded prompts/", out)
 
@@ -402,7 +402,7 @@ class TestInitSaysWhatItCouldNotWrite(WorkDir):
         code, out, err = run_cli(["--root", root, "init"])
         self.assertEqual((code, err), (0, ""))
         self.assertIn("scaffolded prompts/", out)
-        self.assertTrue(os.path.isfile(os.path.join(root, ".promptregress",
+        self.assertTrue(os.path.isfile(os.path.join(root, ".prompt-assert",
                                                     ".gitignore")))
         code, out, err = run_cli(["--root", root, "init"])
         self.assertEqual((code, err), (0, ""))

@@ -17,14 +17,14 @@ from contextlib import redirect_stderr, redirect_stdout
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from unittest import mock
 
-from promptregress import cli as cli_mod
-from promptregress import demo as demo_mod
-from promptregress import miniyaml as miniyaml_mod
-from promptregress import model as model_mod
-from promptregress import runner as runner_mod
-from promptregress import suite as suite_mod
+from prompt_assert import cli as cli_mod
+from prompt_assert import demo as demo_mod
+from prompt_assert import miniyaml as miniyaml_mod
+from prompt_assert import model as model_mod
+from prompt_assert import runner as runner_mod
+from prompt_assert import suite as suite_mod
 
-from promptregress.demo import start_fake_model
+from prompt_assert.demo import start_fake_model
 
 
 def stop_server(server):
@@ -223,7 +223,7 @@ class TestRunner(unittest.TestCase):
             runner_mod.run_suite(tmp, "cls", "v1", model_kw=kw)
         finally:
             stop_server(server)
-        cached = os.listdir(os.path.join(tmp, ".promptregress", "cache"))
+        cached = os.listdir(os.path.join(tmp, ".prompt-assert", "cache"))
         judges = [f for f in cached if f.startswith("judge-")]
         self.assertEqual(len(judges), 1)
 
@@ -278,12 +278,12 @@ class TestSuite(unittest.TestCase):
 class TestCLI(unittest.TestCase):
     def _run(self, tmp, *argv, env_model=None):
         if env_model:
-            os.environ["PROMPTREGRESS_BASE_URL"] = env_model
+            os.environ["PROMPT_ASSERT_BASE_URL"] = env_model
         buf = io.StringIO()
         with redirect_stdout(buf):
             code = cli_mod.main(["--root", tmp, *argv])
         if env_model:
-            del os.environ["PROMPTREGRESS_BASE_URL"]
+            del os.environ["PROMPT_ASSERT_BASE_URL"]
         return code, buf.getvalue()
 
     def test_run_pass(self):
@@ -419,7 +419,7 @@ class TestCLI(unittest.TestCase):
     def test_demo_run_scaffolds_and_passes(self):
         # Zero-dependency trial: empty dir, no model server needed.
         tmp = tempfile.mkdtemp()
-        os.environ.pop("PROMPTREGRESS_BASE_URL", None)
+        os.environ.pop("PROMPT_ASSERT_BASE_URL", None)
         code, out = self._run(tmp, "--demo", "run", "--prompt", "sentiment",
                               "--version", "v1")
         self.assertEqual(code, 0)
@@ -430,7 +430,7 @@ class TestCLI(unittest.TestCase):
         # so a missing Ollama is never contacted.
         tmp = tempfile.mkdtemp()
         make_suite(tmp)
-        os.environ.pop("PROMPTREGRESS_BASE_URL", None)
+        os.environ.pop("PROMPT_ASSERT_BASE_URL", None)
         code, out = self._run(tmp, "--demo", "run", "--prompt", "cls",
                               "--version", "v1")
         self.assertEqual(code, 1)  # fake answers "ok" -> contains fails
@@ -441,7 +441,7 @@ class TestCLI(unittest.TestCase):
         # The demo's v2 chats on the neutral review (the README headline):
         # one verdict flips, with before/after outputs shown.
         tmp = tempfile.mkdtemp()
-        os.environ.pop("PROMPTREGRESS_BASE_URL", None)
+        os.environ.pop("PROMPT_ASSERT_BASE_URL", None)
         code, out = self._run(tmp, "--demo", "diff", "v1", "v2",
                               "--prompt", "sentiment")
         self.assertEqual(code, 0)
@@ -467,13 +467,13 @@ class TestCLI(unittest.TestCase):
         # reachable passed from cache.
         tmp = tempfile.mkdtemp()
         cli_mod.scaffold_example(tmp)
-        os.environ.pop("PROMPTREGRESS_BASE_URL", None)
+        os.environ.pop("PROMPT_ASSERT_BASE_URL", None)
         code, out = self._run(tmp, "--demo", "run", "--prompt", "sentiment",
                               "--version", "v1")
         self.assertEqual(code, 0)
         self.assertIn("3/3 passed", out)
         self.assertFalse(os.path.exists(
-            os.path.join(tmp, ".promptregress", "cache")))
+            os.path.join(tmp, ".prompt-assert", "cache")))
         out_buf, err_buf = io.StringIO(), io.StringIO()
         with redirect_stdout(out_buf), redirect_stderr(err_buf):
             code = cli_mod.main(["--root", tmp, "--base-url",
@@ -505,7 +505,7 @@ class TestCLI(unittest.TestCase):
         self.assertEqual(code, 2)
         err = err_buf.getvalue()
         self.assertIn("error: model unreachable", err)
-        self.assertIn("PROMPTREGRESS_BASE_URL", err)
+        self.assertIn("PROMPT_ASSERT_BASE_URL", err)
         # the all-FAIL table must not be emitted
         self.assertNotIn("CHANGED", out_buf.getvalue())
         self.assertNotIn("case(s) changed", out_buf.getvalue())
@@ -516,7 +516,7 @@ class TestCLI(unittest.TestCase):
             with self.assertRaises(SystemExit) as ctx:
                 cli_mod.main(["--version"])
         self.assertEqual(ctx.exception.code, 0)
-        self.assertIn("promptregress", out_buf.getvalue())
+        self.assertIn("prompt-assert", out_buf.getvalue())
 
     # ---- round-2 release-panel regressions ----
 
@@ -527,26 +527,26 @@ class TestCLI(unittest.TestCase):
         return code, out_buf.getvalue(), err_buf.getvalue()
 
     def test_demo_ignores_base_url_env(self):
-        # PROMPTREGRESS_BASE_URL in the environment used to override
+        # PROMPT_ASSERT_BASE_URL in the environment used to override
         # --demo, so the "zero-setup trial" silently hit a real (here:
         # dead) server. --demo must always use the fake model, and say
         # once that the variable is being ignored.
         tmp = tempfile.mkdtemp()
-        old = os.environ.get("PROMPTREGRESS_BASE_URL")
-        os.environ["PROMPTREGRESS_BASE_URL"] = "http://127.0.0.1:1/v1"
+        old = os.environ.get("PROMPT_ASSERT_BASE_URL")
+        os.environ["PROMPT_ASSERT_BASE_URL"] = "http://127.0.0.1:1/v1"
         try:
             code, out, err = self._run_capture(
                 ["--root", tmp, "--demo", "run", "--prompt", "sentiment",
                  "--version", "v1"])
         finally:
             if old is None:
-                del os.environ["PROMPTREGRESS_BASE_URL"]
+                del os.environ["PROMPT_ASSERT_BASE_URL"]
             else:
-                os.environ["PROMPTREGRESS_BASE_URL"] = old
+                os.environ["PROMPT_ASSERT_BASE_URL"] = old
         self.assertEqual(code, 0, err)
         self.assertIn("3/3 passed", out)
         self.assertNotIn("unreachable", err)
-        self.assertEqual(err.count("ignoring PROMPTREGRESS_BASE_URL="), 1)
+        self.assertEqual(err.count("ignoring PROMPT_ASSERT_BASE_URL="), 1)
         # an explicit --base-url is ignored in --demo too, and said so
         code, out, err = self._run_capture(
             ["--root", tmp, "--demo", "--base-url", "http://127.0.0.1:1/v1",
@@ -557,7 +557,7 @@ class TestCLI(unittest.TestCase):
 
     def test_model_errors_show_status_and_message(self):
         # Every ModelError printed the same "model unreachable; set
-        # PROMPTREGRESS_BASE_URL" line, so a bad API key (401), a wrong
+        # PROMPT_ASSERT_BASE_URL" line, so a bad API key (401), a wrong
         # path (404) and a dead host were indistinguishable.
         tmp = tempfile.mkdtemp()
         cli_mod.scaffold_example(tmp)
@@ -591,7 +591,7 @@ class TestCLI(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertIn("error: model unreachable at http://127.0.0.1:1/v1",
                       errdead)
-        self.assertIn("PROMPTREGRESS_BASE_URL", errdead)
+        self.assertIn("PROMPT_ASSERT_BASE_URL", errdead)
         self.assertEqual(len({err401, err404, errdead}), 3)
         # diff reports the same real reason
         server, url = start_error_server(401, '{"error": "nope"}')
@@ -607,13 +607,13 @@ class TestCLI(unittest.TestCase):
 
     def test_demo_scaffold_dir_is_removed(self):
         # --demo scaffolded into tempfile.mkdtemp() and never cleaned up:
-        # one promptregress-demo-* dir per trial run piled up in /tmp.
+        # one prompt-assert-demo-* dir per trial run piled up in /tmp.
         # a private temp dir: another process (a parallel test run, another
-        # promptregress) also creates and removes promptregress-demo-* dirs in
+        # prompt-assert) also creates and removes prompt-assert-demo-* dirs in
         # the shared one
         private = tempfile.mkdtemp()
         tmp = tempfile.mkdtemp()
-        os.environ.pop("PROMPTREGRESS_BASE_URL", None)
+        os.environ.pop("PROMPT_ASSERT_BASE_URL", None)
         with mock.patch.object(tempfile, "tempdir", private):
             code, out, err = self._run_capture(
                 ["--root", tmp, "--demo", "diff", "v1", "v2",
@@ -628,7 +628,7 @@ class TestCLI(unittest.TestCase):
     def test_demo_json_output_is_pure_json(self):
         # the scaffold notice goes to stderr so --format json stays parseable
         tmp = tempfile.mkdtemp()
-        os.environ.pop("PROMPTREGRESS_BASE_URL", None)
+        os.environ.pop("PROMPT_ASSERT_BASE_URL", None)
         code, out, err = self._run_capture(
             ["--root", tmp, "--demo", "run", "--prompt", "sentiment",
              "--version", "v1", "--format", "json"])
@@ -639,11 +639,11 @@ class TestCLI(unittest.TestCase):
         tmp = tempfile.mkdtemp()
         code, out, _ = self._run_capture(["--root", tmp, "init"])
         self.assertEqual(code, 0)
-        p = os.path.join(tmp, ".promptregress", ".gitignore")
+        p = os.path.join(tmp, ".prompt-assert", ".gitignore")
         self.assertTrue(os.path.isfile(p))
         with open(p, encoding="utf-8") as f:
             self.assertIn("*\n!.gitignore\n", f.read())
-        self.assertIn(".promptregress/.gitignore", out)
+        self.assertIn(".prompt-assert/.gitignore", out)
         # a run that fills the cache in a fresh clone creates it too
         tmp2 = tempfile.mkdtemp()
         make_suite(tmp2)
@@ -655,7 +655,7 @@ class TestCLI(unittest.TestCase):
         finally:
             stop_server(server)
         self.assertTrue(os.path.isfile(
-            os.path.join(tmp2, ".promptregress", ".gitignore")))
+            os.path.join(tmp2, ".prompt-assert", ".gitignore")))
 
 
 def start_hanging_server():
@@ -697,13 +697,13 @@ class TestRound3(unittest.TestCase):
         tmp = tempfile.mkdtemp()
         env = {**os.environ, "PYTHONIOENCODING": "cp1252:strict"}
         env.pop("PYTHONUTF8", None)
-        env.pop("PROMPTREGRESS_BASE_URL", None)
+        env.pop("PROMPT_ASSERT_BASE_URL", None)
         repo_root = os.path.dirname(os.path.dirname(
             os.path.abspath(cli_mod.__file__)))
 
         def run(*argv):
             return subprocess.run(
-                [sys.executable, "-m", "promptregress", "--root", tmp, *argv],
+                [sys.executable, "-m", "prompt_assert", "--root", tmp, *argv],
                 capture_output=True, cwd=repo_root, env=env, timeout=120)
 
         p = run("--demo", "run", "--prompt", "sentiment", "--version", "v2")
@@ -819,7 +819,7 @@ class TestRound3(unittest.TestCase):
         self.assertTrue(args.demo)
         self.assertEqual(args.timeout, 2.5)
         # --demo after the subcommand really uses the fake model
-        os.environ.pop("PROMPTREGRESS_BASE_URL", None)
+        os.environ.pop("PROMPT_ASSERT_BASE_URL", None)
         code, out, err = self._run_capture(
             ["--root", tempfile.mkdtemp(), "run", "--prompt", "sentiment",
              "--version", "v1", "--demo"])
@@ -859,15 +859,15 @@ class TestRound3(unittest.TestCase):
         self.assertEqual(len(results), 2)
         # env default and the built-in default
         self.assertEqual(model_mod._cfg()["timeout"], model_mod.DEFAULT_TIMEOUT)
-        old = os.environ.get("PROMPTREGRESS_TIMEOUT")
-        os.environ["PROMPTREGRESS_TIMEOUT"] = "7"
+        old = os.environ.get("PROMPT_ASSERT_TIMEOUT")
+        os.environ["PROMPT_ASSERT_TIMEOUT"] = "7"
         try:
             self.assertEqual(model_mod._cfg()["timeout"], 7.0)
         finally:
             if old is None:
-                del os.environ["PROMPTREGRESS_TIMEOUT"]
+                del os.environ["PROMPT_ASSERT_TIMEOUT"]
             else:
-                os.environ["PROMPTREGRESS_TIMEOUT"] = old
+                os.environ["PROMPT_ASSERT_TIMEOUT"] = old
 
     def test_run_all(self):
         # One command for CI: every prompt x every version, a summary
@@ -937,7 +937,7 @@ class TestRound3(unittest.TestCase):
 
     def test_demo_run_all_scaffolds(self):
         tmp = tempfile.mkdtemp()
-        os.environ.pop("PROMPTREGRESS_BASE_URL", None)
+        os.environ.pop("PROMPT_ASSERT_BASE_URL", None)
         code, out, err = self._run_capture(
             ["--root", tmp, "--demo", "run", "--all"])
         self.assertEqual(code, 1, err)  # the demo v2 regression
@@ -1228,7 +1228,7 @@ class TestRound4(unittest.TestCase):
         self.assertFalse(r.passed)
         self.assertIn("judge unavailable", r.assertions[0].detail)
         self.assertIn("answered without any text", r.assertions[0].detail)
-        cached = os.listdir(os.path.join(tmp, ".promptregress", "cache"))
+        cached = os.listdir(os.path.join(tmp, ".prompt-assert", "cache"))
         self.assertEqual([f for f in cached if f.startswith("judge-")], [])
 
 
@@ -1264,7 +1264,7 @@ class ClosedPipe(io.StringIO):
 # the interpreter's own flush at exit meets the same failing write.
 WINDOWS_CHILD = """
 import errno, io, os, sys
-from promptregress import cli
+from prompt_assert import cli
 
 
 class WinPipe(io.RawIOBase):
@@ -1297,7 +1297,7 @@ sys.exit(code)
 
 
 class TestClosedPipe(unittest.TestCase):
-    """`promptregress ... | head -1`: the reader quits while we still
+    """`prompt-assert ... | head -1`: the reader quits while we still
     write. No traceback, no "Exception ignored" noise, and the exit code
     stays the command's own (for `run` it is the verdict)."""
 
@@ -1307,7 +1307,7 @@ class TestClosedPipe(unittest.TestCase):
         """Run the CLI with stdout (and stderr when `both`) wired to a pipe
         whose reader is already gone. Returns (exit code, stderr text)."""
         env = {**os.environ}
-        env.pop("PROMPTREGRESS_BASE_URL", None)
+        env.pop("PROMPT_ASSERT_BASE_URL", None)
         env.pop("PYTHONUNBUFFERED", None)
         if unbuffered:  # write-through: the error is raised inside print()
             env["PYTHONUNBUFFERED"] = "1"
@@ -1315,7 +1315,7 @@ class TestClosedPipe(unittest.TestCase):
         os.close(r)
         try:
             p = subprocess.run(
-                [sys.executable, "-m", "promptregress", *argv], stdout=w,
+                [sys.executable, "-m", "prompt_assert", *argv], stdout=w,
                 stderr=w if both else subprocess.PIPE, cwd=self.REPO,
                 env=env, timeout=120)
         finally:
@@ -1350,7 +1350,7 @@ class TestClosedPipe(unittest.TestCase):
                 self._assert_quiet(err, label)
 
     def test_closed_pipe_on_both_streams_keeps_the_error_code(self):
-        # `promptregress ... 2>&1 | head`: even the error line has nowhere
+        # `prompt-assert ... 2>&1 | head`: even the error line has nowhere
         # to go, and exit code 2 (model unusable) must survive
         tmp = tempfile.mkdtemp()
         make_suite(tmp)
@@ -1530,7 +1530,7 @@ class TestClosedPipe(unittest.TestCase):
         # flush at exit would print "Exception ignored" and exit 120.
         tmp = tempfile.mkdtemp()
         env = {**os.environ}
-        env.pop("PROMPTREGRESS_BASE_URL", None)
+        env.pop("PROMPT_ASSERT_BASE_URL", None)
         cases = [
             (["--demo", "run", "--prompt", "sentiment", "--version", "v2"], 1),
             (["--demo", "run", "--prompt", "sentiment", "--version", "v1"], 0),
