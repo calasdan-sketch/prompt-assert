@@ -14,7 +14,7 @@ except ImportError:  # Python 3.10 has no tomllib
     tomllib = None
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-REPO_URL = "https://github.com/calasdan-sketch/promptregress"
+REPO_URL = "https://github.com/calasdan-sketch/prompt-assert"
 
 
 def read(*parts):
@@ -108,7 +108,7 @@ class TestPackagingMetadata(unittest.TestCase):
             self.assertTrue(callable(getattr(importlib.import_module(module),
                                              attr)))
         self.assertEqual(project["name"], "prompt-assert")
-        self.assertEqual(project["version"], "0.2.0")
+        self.assertEqual(project["version"], "0.3.0")
 
 
 class TestSourceDistribution(unittest.TestCase):
@@ -119,7 +119,8 @@ class TestSourceDistribution(unittest.TestCase):
 
     #: files the test suite opens that are not in an sdist by default
     READ_BY_THE_TESTS = (".github/workflows/ci.yml",
-                         "examples/prompt-assert-example.yml")
+                         "examples/prompt-assert-example.yml",
+                         "CHANGELOG.md")
 
     def manifest(self):
         lines = (ln.strip() for ln in read("MANIFEST.in").splitlines())

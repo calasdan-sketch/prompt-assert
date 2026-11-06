@@ -18,7 +18,8 @@ that is missing or unusable (no cases, an assertion that does not exist ...),
 a file that cannot be read or written (`init` in a read-only folder), an API
 key that cannot be sent, a model that cannot be used. `diff` only reports: it
 exits 0 whenever the comparison was made, whether or not verdicts flipped (a
-flip can be a fix as well as a regression; gate builds with `run`). A response
+flip can be a fix as well as a regression; gate builds with `run`), unless
+--fail-on-regression is given: then a pass -> FAIL flip is exit 1. A response
 cache that cannot be written is no error: it is skipped, with one warning.
 """
 
@@ -33,11 +34,13 @@ import sys
 import tempfile
 
 from . import demo as demo_mod
+from . import junit as junit_mod
 from . import model as model_mod
 from . import runner as runner_mod
 from . import suite as suite_mod
+from .textsafe import clean
 
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 
 
 def _harden_streams() -> None:
@@ -122,7 +125,11 @@ class _PipeSafe:
             _discard_output(self._stream)
 
     def write(self, text):
-        self._call("write", text)
+        # Every character that would act on the terminal instead of
+        # printing (ANSI escapes, \r, bidi overrides, zero-width ...) is
+        # shown as an escape: a model's reply or a server's error text must
+        # not be able to rewrite the report (textsafe).
+        self._call("write", clean(text) if isinstance(text, str) else text)
         return len(text)
 
     def flush(self):
@@ -293,7 +300,9 @@ def _print_run(name: str, version: str,
     print(f"{name}.{version}: {line}")
     failed = [r for r in results if not r.passed]
     for r in failed:
-        print(f"\n  FAIL {r.name}")
+        runs = (f" (passed {r.passes}/{r.runs} runs)"
+                if r.runs > 1 and not r.error else "")
+        print(f"\n  FAIL {r.name}{runs}")
         if r.error:
             print(f"    error: {r.error}")
             continue
@@ -301,9 +310,16 @@ def _print_run(name: str, version: str,
             if not a.passed:
                 print(f"    ✗ {a.assertion} -> {a.detail}")
         print(f"    output: {r.output[:300]!r}")
+    flaky = [r for r in results if r.passed and r.flaky]
+    if flaky:
+        print()
+    for r in flaky:
+        print(f"  flaky: {r.name} passed {r.passes}/{r.runs} runs")
     n_pass = len(results) - len(failed)
     cached = sum(1 for r in results if r.cached)
+    runs = max((r.runs for r in results), default=1)
     print(f"\n{n_pass}/{len(results)} passed"
+          + (f" ({runs} runs each)" if runs > 1 else "")
           + (f" ({cached} cached)" if cached else ""))
     return 0 if not failed else 1
 
@@ -348,7 +364,8 @@ def _run_or_error(root, name, version, args, cases=None):
     try:
         results, _ = runner_mod.run_suite(
             root, name, version, cases=cases, model_kw=_model_kw(args),
-            use_cache=_use_cache(args))
+            use_cache=_use_cache(args), repeat=args.repeat,
+            min_pass_rate=args.min_pass_rate)
     except (OSError, ValueError) as e:
         print(f"error: {runner_mod.error_text(e)}", file=sys.stderr)
         return None, 2
@@ -376,6 +393,8 @@ def cmd_run(args) -> int:
             return 2
     else:
         targets = [(args.prompt, args.version)]
+    if _bad_repeat_options(args):
+        return 2
     cases = _load_suites(root, [name for name, _ in targets])
     if cases is None:
         return 2
@@ -385,6 +404,15 @@ def cmd_run(args) -> int:
         if results is None:
             return rc
         suites.append((name, version, results))
+    if args.junit:
+        try:
+            junit_mod.write(args.junit, suites)
+        except OSError as e:
+            # asked for a report and unable to write it: a CI job must
+            # not go green without the file it was told to expect
+            print(f"error: cannot write the JUnit report: "
+                  f"{runner_mod.error_text(e)}", file=sys.stderr)
+            return 2
     if args.format == "json":
         if not args.all:
             name, version, results = suites[0]
@@ -418,7 +446,20 @@ def cmd_run(args) -> int:
     return rc
 
 
+def _bad_repeat_options(args) -> bool:
+    """True after printing the error when the repeat flags contradict
+    each other (see runner.check_repeat_options)."""
+    try:
+        runner_mod.check_repeat_options(args.repeat, args.min_pass_rate)
+    except ValueError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return True
+    return False
+
+
 def cmd_diff(args) -> int:
+    if _bad_repeat_options(args):
+        return 2
     root = _demo_root(args) if args.demo else args.root
     r1, rc = _run_or_error(root, args.prompt, args.v1, args)
     if r1 is None:
@@ -440,7 +481,7 @@ def cmd_diff(args) -> int:
     if args.format == "json":
         print(json.dumps({"prompt": args.prompt, "v1": args.v1,
                           "v2": args.v2, "cases": rows}, indent=2))
-        return 0
+        return _diff_status(args, rows)
     w = max([len(r["name"]) for r in rows] + [4])
     print(f"{'case':<{w}}  {args.v1:>6}  {args.v2:>6}")
     for r in rows:
@@ -453,6 +494,20 @@ def cmd_diff(args) -> int:
         print(f"  {args.v2} output: {r['v2_output']!r}")
     print(f"\n{len(flipped)}/{len(rows)} case(s) changed verdict "
           f"{args.v1} -> {args.v2}")
+    status = _diff_status(args, rows)
+    if status:
+        broke = sum(1 for r in rows if r["v1"] == "pass" and r["v2"] == "FAIL")
+        print(f"{broke} case(s) regressed (pass -> FAIL): exit 1 "
+              f"(--fail-on-regression)", file=sys.stderr)
+    return status
+
+
+def _diff_status(args, rows) -> int:
+    """0, or 1 under --fail-on-regression when a case went pass -> FAIL (a
+    FAIL -> pass flip is a fix and never fails it)."""
+    if getattr(args, "fail_on_regression", False) and any(
+            r["v1"] == "pass" and r["v2"] == "FAIL" for r in rows):
+        return 1
     return 0
 
 
@@ -502,6 +557,19 @@ def _add_model_options(p: argparse.ArgumentParser, *, on_subcommand: bool) -> No
                         "prompt is missing.")
 
 
+def _add_repeat_options(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--repeat", type=_flag(runner_mod.parse_repeat),
+                   default=1, metavar="N",
+                   help="Run each case N times (default 1). Runs after the "
+                        "first are cached separately; --no-cache draws "
+                        "fresh ones.")
+    p.add_argument("--min-pass-rate", type=_flag(runner_mod.parse_pass_rate),
+                   default=1.0, metavar="RATE",
+                   help="With --repeat: the share of runs a case must pass, "
+                        "e.g. 0.8 or 80%% (default 1: every run). Rounded "
+                        "up: 0.8 of 5 runs is 4.")
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="prompt-assert", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -525,16 +593,22 @@ def build_parser() -> argparse.ArgumentParser:
                         "print a summary table; exit 1 if any case fails.")
     r.add_argument("--no-cache", action="store_true")
     r.add_argument("--format", choices=["human", "json"], default="human")
+    r.add_argument("--junit", metavar="PATH",
+                   help="Also write a JUnit XML report to PATH (for CI test "
+                        "views). A report that cannot be written is exit 2.")
+    _add_repeat_options(r)
     _add_model_options(r, on_subcommand=True)
 
     d = sub.add_parser(
         "diff", help="A/B two versions on the same cases (exits 0 even when "
-                     "verdicts flip: gate builds with `run`).",
+                     "verdicts flip, unless --fail-on-regression).",
         description="Run both versions on the same cases and show which cases "
                     "change verdict. Exit status: 0 whenever the comparison "
                     "was made, flipped verdicts included - a flip can be a "
                     "fix as well as a regression, so diff reports and does "
-                    "not judge; gate a build with `run`. 2 when the "
+                    "not judge; gate a build with `run` or "
+                    "--fail-on-regression (exit 1 on a pass -> FAIL flip). "
+                    "2 when the "
                     "comparison could not be made (a missing or unusable "
                     "file, a model that cannot answer).")
     d.add_argument("v1")
@@ -542,6 +616,10 @@ def build_parser() -> argparse.ArgumentParser:
     d.add_argument("--prompt", required=True)
     d.add_argument("--no-cache", action="store_true")
     d.add_argument("--format", choices=["human", "json"], default="human")
+    d.add_argument("--fail-on-regression", action="store_true",
+                   help="Exit 1 when a case passes on v1 and fails on v2 "
+                        "(a FAIL -> pass flip never fails it).")
+    _add_repeat_options(d)
     _add_model_options(d, on_subcommand=True)
     return p
 

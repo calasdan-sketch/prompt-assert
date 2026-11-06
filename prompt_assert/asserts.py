@@ -4,6 +4,10 @@ Supported assertions (each is a one-key dict in the case's `assert` list):
 
   contains: str            output contains str
   not_contains: str        output does not contain str
+  icontains: str           contains str, ignoring case (casefold)
+  equals: str              the whole output is str (outer whitespace aside)
+  contains_any: [a, b]     output contains at least one of the texts
+  contains_all: [a, b]     output contains every one of the texts
   regex: pattern           re.search finds pattern
   not_regex: pattern        re.search finds nothing
   starts_with: str / ends_with: str
@@ -175,12 +179,17 @@ def _check_schema(data, schema: dict, path: str = "$") -> list[str]:
     return errors
 
 
-TEXT_KINDS = ("contains", "not_contains", "regex", "not_regex",
-              "starts_with", "ends_with")
+TEXT_KINDS = ("contains", "not_contains", "icontains", "equals", "regex",
+              "not_regex", "starts_with", "ends_with")
+#: Take a list of texts: `contains_any: [refund, credit]`.
+LIST_KINDS = ("contains_any", "contains_all")
 COUNT_KINDS = ("max_tokens", "min_tokens")
 #: Every assertion name. `judge` is put to a model by the runner; evaluate()
 #: decides all the others itself.
-KINDS = TEXT_KINDS + ("json_valid", "schema") + COUNT_KINDS + ("judge",)
+KINDS = (TEXT_KINDS + LIST_KINDS + ("json_valid", "schema") + COUNT_KINDS
+         + ("judge",))
+#: At most this many texts in one contains_any / contains_all.
+MAX_LIST_ITEMS = 100
 
 
 def as_text(value, where: str) -> str:
@@ -215,6 +224,23 @@ def _text(kind: str, want) -> str:
                if kind in ("not_contains", "not_regex") else
                "match every reply - write the text to look for"))
     return text
+
+
+def _texts(kind: str, want) -> list[str]:
+    """The list operand of contains_any / contains_all: one or more texts,
+    none of them empty. An empty list would pass (all) or fail (any) every
+    reply, so it is refused, like an empty `contains: ""`."""
+    if not isinstance(want, list):
+        raise ValueError(
+            f"{kind}: needs a list of texts, e.g. {kind}: [refund, credit] "
+            f"(got {describe(want)}) - for a single text use `contains`")
+    if not want:
+        raise ValueError(f"{kind}: is an empty list - write the texts to "
+                         f"look for, e.g. {kind}: [refund, credit]")
+    if len(want) > MAX_LIST_ITEMS:
+        raise ValueError(f"{kind}: has {len(want)} texts; at most "
+                         f"{MAX_LIST_ITEMS} are allowed (use a regex)")
+    return [_text(f"{kind}[{i}]", item) for i, item in enumerate(want)]
 
 
 def _flag(kind: str, want) -> bool:
@@ -300,6 +326,8 @@ def check(assertion) -> dict:
         if kind in ("regex", "not_regex"):
             _pattern(kind, text)         # a pattern that cannot compile
         return {kind: text}
+    if kind in LIST_KINDS:
+        return {kind: _texts(kind, want)}
     if kind in COUNT_KINDS:
         return {kind: _count(kind, want)}
     if kind == "json_valid":
@@ -321,6 +349,24 @@ def evaluate(assertion: dict, output: str) -> tuple[bool, str]:
     if kind == "not_contains":
         ok = want not in output
         return ok, f"absent {want!r}" if ok else f"unexpectedly contains {want!r}"
+    if kind == "icontains":
+        ok = want.casefold() in output.casefold()
+        return ok, (f"contains {want!r} (any case)" if ok
+                    else f"missing {want!r} (any case)")
+    if kind == "equals":
+        ok = output.strip() == want.strip()
+        return ok, ("equals the expected text" if ok
+                    else f"expected exactly {want!r}")
+    if kind == "contains_any":
+        found = [t for t in want if t in output]
+        return (bool(found), f"contains {found[0]!r}" if found
+                else f"contains none of {want!r}")
+    if kind == "contains_all":
+        missing = [t for t in want if t not in output]
+        return (not missing, f"contains all {len(want)} texts" if not missing
+                else f"missing {', '.join(repr(t) for t in missing[:5])}"
+                + (f" and {len(missing) - 5} more" if len(missing) > 5
+                   else ""))
     if kind == "regex":
         pat = _pattern(kind, want)
         ok = pat.search(output) is not None

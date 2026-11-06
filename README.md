@@ -1,5 +1,9 @@
 # prompt-assert
 
+**Catch prompt regressions in CI: golden cases in YAML, deterministic
+assertions, exit 1 on a regression. Zero dependencies, no telemetry, any
+OpenAI-compatible model (Ollama, LM Studio, hosted APIs).**
+
 *Formerly promptregress.* The old `promptregress` command and `PROMPTREGRESS_*` environment variables still work; the import package is now `prompt_assert`.
 
 `pytest` for prompts, local-first. Prompt drift — not model decay — causes
@@ -42,13 +46,22 @@ Exit code 1, so CI blocks the merge. (Both outputs above are what
 Zero dependencies — Python 3.10+ stdlib only.
 
 ```bash
-pip install git+https://github.com/calasdan-sketch/promptregress
+pip install prompt-assert
+```
+
+That is the last release on PyPI (0.2.0). This branch is 0.3.0 (unreleased:
+`--repeat`, `--junit`, `diff --fail-on-regression`, the new assertions and
+the terminal-safe output below); until it is released, install it from the
+repository:
+
+```bash
+pip install git+https://github.com/calasdan-sketch/prompt-assert
 ```
 
 Or from a clone:
 
 ```bash
-git clone https://github.com/calasdan-sketch/promptregress && cd promptregress
+git clone https://github.com/calasdan-sketch/prompt-assert && cd prompt-assert
 pip install .
 ```
 
@@ -131,8 +144,8 @@ YAML's escapes: `\n` `\t` `\r` `\"` `\\` `\/` `\0` `\a` `\b` `\v` `\f` `\e`
 `\N` `\_` `\L` `\P`, a backslash and a space, and `\xE9`, `\u00e9` and
 `\U0001F600` (2, 4 and 8 hex digits: how PyYAML writes an accented letter or
 an emoji). Any other backslash there is a line-numbered error, never kept as
-text: a Windows path needs `\\` for each backslash (`"C:\\Users\\dan"`), or
-single quotes (`'C:\Users\dan'`), and half of a surrogate pair (`\ud83d` on
+text: a Windows path needs `\\` for each backslash (`"C:\\Users\\sam"`), or
+single quotes (`'C:\Users\sam'`), and half of a surrogate pair (`\ud83d` on
 its own) is not a character. Single-quoted strings are literal, except that
 `''` is one apostrophe (`'it''s'` is `it's`); plain and block scalars have no
 escapes at all. The cases file is read by a small built-in YAML subset
@@ -202,8 +215,27 @@ assertion fails that case with `bad assertion: ...`, it never crashes the run.
 
 ## Assertions (deterministic, no LLM)
 
-`contains` · `not_contains` · `regex` · `not_regex` · `starts_with` ·
-`ends_with` · `json_valid` · `schema` · `max_tokens` · `min_tokens`.
+`contains` · `not_contains` · `icontains` · `equals` · `contains_any` ·
+`contains_all` · `regex` · `not_regex` · `starts_with` · `ends_with` ·
+`json_valid` · `schema` · `max_tokens` · `min_tokens`.
+
+```yaml
+assert:
+  - equals: negative                 # the whole reply, outer whitespace aside
+  - icontains: NEGATIVE              # anywhere, in any case
+  - contains_any: [refund, credit]   # at least one of them
+  - contains_all: [order, "#1234"]   # every one of them
+```
+
+- `contains`, `starts_with` and `ends_with` are case-sensitive; `icontains`
+  ignores case (Unicode casefolding: `STRASSE` matches `straße`).
+  `ends_with` ignores trailing whitespace.
+- `equals` compares the whole reply with the text, ignoring only leading
+  and trailing whitespace (a model's closing newline). `Neutral.` is not
+  `neutral`; use `icontains` or a `regex` for looser matches.
+- `contains_any` / `contains_all` take a list of 1 to 100 texts, none of
+  them empty: an empty list would pass or fail every reply, so it is an
+  error.
 
 - `json_valid: true` wants a reply that parses as JSON; `json_valid: false`
   wants one that does not. Anything but true or false is an error.
@@ -258,6 +290,26 @@ wherever `Location` points. A 301/302/303/307/308 stops the run with
 `model at … redirected the request to … the API key was not sent there`;
 point `--base-url` at the new address.
 
+### Output that cannot act on your terminal
+
+A model's reply, a judge's reasoning, a server's error text, a case name:
+any of it can carry ANSI escape sequences, a carriage return, bidirectional
+overrides or zero-width characters, and terminals and CI logs (GitHub
+Actions' among them) act on those - a reply could recolour the report,
+overwrite a `FAIL` line with `3/3 passed`, or show text in another order
+than it is stored. Everything prompt-assert prints goes through one filter
+that shows each such character as a visible escape (`\x1b[2K`, `\r`,
+`\u202e`) and leaves every other character alone, accents, scripts and
+emoji included. The set is every Unicode control, format, surrogate and
+line/paragraph separator character, bar tab and line feed (a test checks
+it against Python's Unicode database), plus the characters that print as
+nothing although Unicode files them elsewhere: the variation selectors,
+which can smuggle hidden data, and the Hangul fillers. One cost: an emoji
+written with a presentation selector (a red heart is U+2764 followed by
+U+FE0F) shows the escape `\ufe0f` after it. `--format json` is unaffected: JSON
+escapes those characters itself, and the text in it is the reply as the
+model sent it.
+
 If the model cannot be used, `run`/`diff` exit 2 with the real reason
 instead of an all-FAIL table — `model unreachable at …`, `answered HTTP 401
 Unauthorized: Invalid API key`, `answered HTTP 404 Not Found`, `timed out
@@ -277,6 +329,57 @@ Both must be positive numbers (`--timeout` at most a day); anything else is
 a usage error, exit 2 - in `PROMPT_ASSERT_TIMEOUT` and
 `PROMPT_ASSERT_MAX_REPLY_BYTES` as well (a `PROMPT_ASSERT_TIMEOUT` that was
 not a number used to be ignored without a word).
+
+## Flaky models: `--repeat`
+
+Temperature 0 is not a promise: many providers still vary from call to
+call, so one green run can hide a case that fails one time in five. Run
+each case several times and say how often it must pass:
+
+```bash
+prompt-assert run --all --repeat 5                       # every run must pass
+prompt-assert run --all --repeat 5 --min-pass-rate 80%   # 4 of 5 is enough
+```
+
+A synthetic example (a fake model that answers `Neutral.` instead of
+`neutral` once in five calls; the case says `equals: neutral`):
+
+```
+$ prompt-assert run --prompt sentiment --version v1 --repeat 5
+sentiment.v1: ..F
+
+  FAIL neutral review (passed 4/5 runs)
+    ✗ {'equals': 'neutral'} -> expected exactly 'neutral'
+    output: 'Neutral.'
+
+2/3 passed (5 runs each)
+```
+
+```
+$ prompt-assert run --prompt sentiment --version v1 --repeat 5 --min-pass-rate 80%
+sentiment.v1: ...
+
+  flaky: neutral review passed 4/5 runs
+
+3/3 passed (5 runs each)
+```
+
+- The default `--min-pass-rate` is 1 (every run). It takes a fraction
+  (`0.8`) or a percentage (`80%`), above 0 and at most 1; the runs needed
+  are rounded up (`0.8` of 5 is 4, `2/3` of 3 is 2), and never fewer than
+  one. `--min-pass-rate` below 1 without `--repeat` (above 1) is a usage
+  error, exit 2: a single run must pass whatever the rate says.
+- A case shows a run that agrees with its verdict: the first failing run
+  when it failed, the first passing run when it passed the gate.
+- `flaky` means one thing: the case passed the gate although some of its
+  runs failed. A case that failed the gate is a failure, never flaky.
+- `--repeat` is a whole number from 1 to 1000 (ASCII digits); it costs that many calls per case. `diff` takes
+  both flags too.
+- Each run has its own cache entry (run 1 shares the entry of a plain run),
+  so a re-run reads the same N answers back and pays nothing. Add
+  `--no-cache` to draw fresh samples.
+- `--format json` gives every repeated case `runs`, `passes` and `flaky`
+  (same meaning as above).
 
 ## Caching
 
@@ -327,6 +430,25 @@ sentiment.v2  2/3  FAIL
 A single version is `prompt-assert run --prompt sentiment --version v2`.
 `--format json` lists every suite with its cases.
 
+### JUnit report
+
+```bash
+prompt-assert run --all --junit prompt-assert.xml
+```
+
+writes a JUnit XML report beside the normal output: one `<testsuite>` per
+prompt version (`sentiment.v2`), one `<testcase>` per case with its time,
+and a `<failure>` holding the failing assertions and the output (cut at
+2000 characters). GitLab, Jenkins and Azure Pipelines read the format
+natively; on GitHub Actions use a test-report action. A relative `PATH` is
+relative to the current directory (not `--root`). The file is written
+whole or not at all (written beside the target and moved into place); a
+report that cannot be written is exit 2, so CI never goes green without
+the file it was told to expect. A model that cannot answer stops the run
+with exit 2 before any report is written, so there is no file then (the
+job fails all the same). Text from the model is cleaned of
+characters XML cannot hold, so the report always parses.
+
 ### Exit codes
 
 The same for the human report and `--format json`:
@@ -334,7 +456,7 @@ The same for the human report and `--format json`:
 | Code | Meaning |
 |---|---|
 | `0` | `run`: every case passed. `list`, `init`: done. `diff`: the comparison was made, whatever it shows |
-| `1` | `run`: at least one case failed |
+| `1` | `run`: at least one case failed. `diff --fail-on-regression`: a case passed on the first version and failed on the second |
 | `2` | usage or configuration error, nothing judged: a prompt or cases file that is missing or malformed; a cases file with no cases (`case:` typed for `cases:`, `cases: []`, an empty file) or with a case or an assertion that cannot be used (see "Checked before anything runs"); a file that cannot be read or written (a prompt file you may not open; `init` in a read-only folder); an API key that cannot be sent (see Model endpoint); a model that cannot be used (unreachable, rejecting the call, redirecting). `list` exits 2 too when a cases file is invalid or unreadable. A response cache that cannot be written is not an error (see Caching) |
 
 A suite with nothing in it never passes: a CI job that ran no cases would
@@ -343,8 +465,10 @@ be green and test nothing.
 `diff` reports, it does not judge: it exits 0 whenever the comparison was
 made, flipped verdicts included - the example at the top of this page exits
 0 though a case regressed, because a flip can be a fix as well as a
-regression. Gate a build with `run` (or `run --all`); to act on a flip, read
-`changed` per case in `diff --format json`.
+regression. Gate a build with `run` (or `run --all`), or add
+`--fail-on-regression`: `diff v1 v2 --fail-on-regression` exits 1 when a
+case went pass -> FAIL, and a FAIL -> pass flip (a fix) never fails it. To
+act on flips yourself, read `changed` per case in `diff --format json`.
 
 Piping is safe: when the reader quits early (`prompt-assert run --all |
 head -5`) the output just stops, with no traceback, and the exit code is
@@ -385,14 +509,41 @@ What this tool does not do, so you do not find out the hard way:
 - `schema` is a mini validator and the cases file is read by a YAML subset
   parser. What they do not understand is refused with an error, never
   ignored.
-- Requests run one after the other; there is no parallel mode.
+- Requests run one after the other; there is no parallel mode (so
+  `--repeat 5` takes five times as long).
+- With `--repeat`, a judge verdict is cached per output text: two runs that
+  produced the same reply share one verdict, the judge is not asked twice.
+- `equals` / `icontains` compare text as stored: two spellings Unicode
+  calls equivalent (a precomposed `é` and `e` plus a combining accent) are
+  different text here.
 - `diff` shows flipped verdicts but exits 0 (see Exit codes); `run` is what
   fails a build.
 
-## Why not Langfuse / LangSmith / Braintrust?
+## How it compares
 
-They're platforms with hosted infra and team workflows. This is one file of
-YAML and a CLI — the solo-dev "just run my 30 golden cases in CI" slot.
+Statements about other tools come from their own docs and package pages
+(linked; checked 2026-11-06). "Not checked" means it was not verified here,
+not that the tool lacks it. Where they do more, it says so.
+
+| | prompt-assert | [promptfoo](https://www.promptfoo.dev/docs/usage/command-line) | [DeepEval](https://github.com/confident-ai/deepeval) | [Inspect](https://inspect.aisi.org.uk/) |
+|---|---|---|---|---|
+| Install | `pip`, Python stdlib only, no dependencies | Node.js CLI (`npx promptfoo@latest`) | `pip install deepeval` | `pip install inspect-ai` |
+| Usage telemetry | none: the only network calls go to the model endpoint you set | on by default, [`PROMPTFOO_DISABLE_TELEMETRY=1`](https://www.promptfoo.dev/docs/configuration/telemetry/) turns it off | on by default, [`DEEPEVAL_TELEMETRY_OPT_OUT=1`](https://deepeval.com/docs/faq) turns it off | not checked |
+| LLM-free assertions | 14 kinds (above) | [many more](https://www.promptfoo.dev/docs/configuration/expected-outputs/): `equals`, `is-json`, `is-sql`, ROUGE/BLEU, custom JS/Python, `not-` on any type ... | mostly LLM-judged metrics (40+); judge defaults to OpenAI unless you configure one ([FAQ](https://deepeval.com/docs/faq)) | built-in scorers incl. text match and model grading |
+| Repeat each case | `--repeat N` with `--min-pass-rate` and a `flaky:` report | `--repeat N` | not checked | epochs |
+| JUnit XML | `--junit PATH` | `-o results.junit.xml` | not checked | not checked |
+| A/B two prompt versions | `diff v1 v2`, optional `--fail-on-regression` | several prompts in one eval (unverified) | not checked | not checked |
+| Malformed suite | refused before any model call, exit 2 (unknown assertion, empty `assert`, unsupported schema keyword ...) | not checked | not checked | not checked |
+| Model output in the terminal | control / bidi / zero-width characters shown as escapes | not checked | not checked | not checked |
+
+Where the others are stronger: promptfoo runs requests in parallel
+(`-j`), has a browser UI (`promptfoo view`), red-teaming (`promptfoo
+redteam`) and far more assertion types; DeepEval has RAG, agent and conversation metrics; Inspect
+has many built-in scorers, epochs and a log viewer (Inspect View).
+prompt-assert is the small, strict, zero-dependency slot: one YAML file of
+golden cases per prompt and a CLI whose exit code you can gate a merge on.
+Hosted platforms (Langfuse, LangSmith, Braintrust) add tracing and team
+workflows; this has none of that.
 
 ## Tests
 
