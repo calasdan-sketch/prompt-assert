@@ -189,8 +189,8 @@ class TestEveryYamlEscapeIsDecoded(unittest.TestCase):
         self.assertEqual(load("a: 'caf\\xE9'"), {"a": "caf\\xE9"})
         self.assertEqual(load("a: caf\\xE9"), {"a": "caf\\xE9"})
         self.assertEqual(load("a: |\n  caf\\xE9\\n\n"), {"a": "caf\\xE9\\n\n"})
-        self.assertEqual(load("a: C:\\Users\\dan"), {"a": "C:\\Users\\dan"})
-        self.assertEqual(load("a: 'C:\\Users\\dan'"), {"a": "C:\\Users\\dan"})
+        self.assertEqual(load("a: C:\\Users\\sam"), {"a": "C:\\Users\\sam"})
+        self.assertEqual(load("a: 'C:\\Users\\sam'"), {"a": "C:\\Users\\sam"})
 
     def test_the_escapes_that_always_worked_still_do(self):
         load = miniyaml.safe_load
@@ -216,7 +216,7 @@ NOT_YAML = (
     ("x\\Zy", r"unknown escape \\Z"),
     ("x\\1y", r"unknown escape \\1"),
     ("x\\'y", r"unknown escape"),
-    ("C:\\Users\\dan", r"\\U needs 8 hex digits"),
+    ("C:\\Users\\sam", r"\\U needs 8 hex digits"),
     ("x\\xZZy", r"\\x needs 2 hex digits"),
     ("x\\x4", r"\\x needs 2 hex digits"),
     ("x\\u12", r"\\u needs 4 hex digits"),
@@ -253,13 +253,13 @@ class TestAnEscapeThatIsNotYamlIsRefused(unittest.TestCase):
                 self.assertTrue(str(ctx.exception).startswith("miniyaml: "))
 
     def test_a_windows_path_written_the_two_ways_the_error_suggests(self):
-        want = {"a": "C:\\Users\\dan"}
-        self.assertEqual(miniyaml.safe_load('a: "C:\\\\Users\\\\dan"'), want)
-        self.assertEqual(miniyaml.safe_load("a: 'C:\\Users\\dan'"), want)
+        want = {"a": "C:\\Users\\sam"}
+        self.assertEqual(miniyaml.safe_load('a: "C:\\\\Users\\\\sam"'), want)
+        self.assertEqual(miniyaml.safe_load("a: 'C:\\Users\\sam'"), want)
 
     def test_the_error_says_what_to_write_instead(self):
         with self.assertRaises(ValueError) as ctx:
-            miniyaml.safe_load('a: "C:\\Users\\dan"')
+            miniyaml.safe_load('a: "C:\\Users\\sam"')
         text = str(ctx.exception)
         self.assertIn("\\\\", text)               # write \\ for a backslash
         self.assertIn("single quotes", text)
@@ -330,7 +330,7 @@ class TestYamlEscapesReachTheModel(Project):
         self.assertEqual(data["cases"][0]["name"], "sm\u00f6rg\u00e5s")
 
     def test_an_escape_that_is_not_yaml_stops_the_run_before_the_model(self):
-        for inside in ("C:\\Users\\dan", "x\\qy", "x\\xZZ", "\\ud83d"):
+        for inside in ("C:\\Users\\sam", "x\\qy", "x\\xZZ", "\\ud83d"):
             with self.subTest(inside=inside):
                 cases = ('cases:\n'
                          '  - name: a\n'

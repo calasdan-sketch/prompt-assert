@@ -449,5 +449,120 @@ class TestDiffGate(Project):
         self.assertEqual(code, 0)
 
 
+# --- panel review fixes (2026-11-06) ---------------------------------------
+
+class TestPanelFixes(Project):
+    def run_json(self, answers, *flags):
+        url, h = self.model(answers)
+        root = self.project(ONE_CASE)
+        code, out, err = run_cli(["--root", root, "run", "--prompt", "s",
+                                  "--version", "v1", "--base-url", url,
+                                  "--format", "json", *flags])
+        return code, (json.loads(out)["cases"][0] if out else None), err, h
+
+    def test_gate_passed_case_shows_a_passing_run(self):
+        # 1: passed: true must not sit next to a failed assertion
+        code, case, _, _ = self.run_json(["bad", "good", "good"],
+                                         "--repeat", "3",
+                                         "--min-pass-rate", "60%")
+        self.assertEqual(code, 0)
+        self.assertTrue(case["passed"])
+        self.assertTrue(all(a["passed"] for a in case["assertions"]))
+        self.assertEqual(case["output"], "good")
+        self.assertTrue(case["flaky"])
+
+    def test_gate_failed_case_shows_a_failing_run(self):
+        code, case, _, _ = self.run_json(["good", "bad", "good"],
+                                         "--repeat", "3")
+        self.assertEqual(code, 1)
+        self.assertFalse(case["passed"])
+        self.assertFalse(case["assertions"][0]["passed"])
+        self.assertEqual(case["output"], "bad")
+
+    def test_flaky_only_for_a_case_that_passed_the_gate(self):
+        # 2: one meaning in JSON, the terminal and the docs
+        code, case, _, _ = self.run_json(["good", "bad", "bad"],
+                                         "--repeat", "3",
+                                         "--min-pass-rate", "60%")
+        self.assertEqual(code, 1)
+        self.assertEqual((case["passes"], case["flaky"]), (1, False))
+        r = runner.CaseResult(name="c", passed=False, output="", assertions=[],
+                              runs=3, passes=1)
+        self.assertFalse(r.flaky)
+
+    def test_pass_rate_without_repeat_is_a_usage_error(self):
+        # 3: never silently ignored
+        url, h = self.model(["good"])
+        root = self.project(ONE_CASE, versions=("v1", "v2"))
+        for argv in (["run", "--prompt", "s", "--version", "v1"],
+                     ["run", "--all"], ["diff", "v1", "v2", "--prompt", "s"]):
+            code, _, err = run_cli(["--root", root, *argv, "--base-url", url,
+                                    "--min-pass-rate", "50%"])
+            self.assertEqual(code, 2, argv)
+            self.assertIn("needs --repeat", err)
+        self.assertEqual(h.calls, [])                 # nothing was sent
+        code, _, _ = run_cli(["--root", root, "run", "--prompt", "s",
+                              "--version", "v1", "--base-url", url,
+                              "--min-pass-rate", "100%"])
+        self.assertEqual(code, 0)                     # 1 is the default
+        with self.assertRaises(ValueError):
+            runner.run_suite(root, "s", "v1", min_pass_rate=0.5)
+
+    def test_variation_selectors_and_hangul_fillers_are_escaped(self):
+        # 4: invisible although not Cc/Cf
+        for cp in (0xfe00, 0xfe0f, 0xe0100, 0xe01ef, 0x180b, 0x180d, 0x180f,
+                   0x115f, 0x1160, 0x3164, 0xffa0):
+            shown = textsafe.clean("a" + chr(cp) + "b")
+            self.assertNotIn(chr(cp), shown, hex(cp))
+            self.assertTrue(shown.isascii(), hex(cp))
+        self.assertEqual(textsafe.clean("\u2764\ufe0f"), "\u2764\\ufe0f")
+        url, _ = self.model(["hid\U000e0101den\u3164"])
+        root = self.project(ONE_CASE)
+        _, out, _ = run_cli(["--root", root, "run", "--prompt", "s",
+                             "--version", "v1", "--base-url", url])
+        self.assertNotIn("\U000e0101", out)
+        self.assertNotIn("\u3164", out)
+
+    def test_repeat_takes_ascii_digits_only(self):
+        # 5: no raw int() error, no other scripts' digits
+        for bad in ("\u00b2", "\u0663", "\uff15", "5\u00b2"):
+            with self.assertRaises(ValueError) as cm:
+                runner.parse_repeat(bad)
+            self.assertIn("whole number from 1", str(cm.exception))
+        root = self.project(ONE_CASE)
+        err = io.StringIO()
+        with self.assertRaises(SystemExit) as cm, redirect_stderr(err):
+            cli_mod.main(["--root", root, "run", "--prompt", "s",
+                          "--version", "v1", "--repeat", "\u00b2"])
+        self.assertEqual(cm.exception.code, 2)
+        self.assertIn("whole number from 1", err.getvalue())
+        self.assertNotIn("invalid literal", err.getvalue())
+
+    def test_junit_model_error_is_an_error_element(self):
+        # 6: the API can hand build() an errored case; it is an <error>
+        r = runner.CaseResult(name="c", passed=False, output="",
+                              assertions=[], error=f"down {ESC}[31m")
+        ok = runner.CaseResult(name="d", passed=True, output="x",
+                               assertions=[])
+        top = junit.build([("s", "v1", [r, ok])])
+        self.assertEqual((top.get("tests"), top.get("failures"),
+                          top.get("errors")), ("2", "0", "1"))
+        suite_el = top.find("testsuite")
+        self.assertEqual(suite_el.get("errors"), "1")
+        case = suite_el.find("testcase")
+        self.assertIsNone(case.find("failure"))
+        self.assertIn("\\x1b", case.find("error").get("message"))
+
+    def test_cli_model_error_writes_no_junit_report(self):
+        root = self.project(ONE_CASE)
+        path = os.path.join(root, "r.xml")
+        code, _, _ = run_cli(["--root", root, "run", "--prompt", "s",
+                              "--version", "v1", "--base-url",
+                              "http://127.0.0.1:9/v1", "--timeout", "2",
+                              "--junit", path])
+        self.assertEqual(code, 2)
+        self.assertFalse(os.path.exists(path))
+
+
 if __name__ == "__main__":
     unittest.main()

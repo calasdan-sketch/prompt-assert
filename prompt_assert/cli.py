@@ -393,6 +393,8 @@ def cmd_run(args) -> int:
             return 2
     else:
         targets = [(args.prompt, args.version)]
+    if _bad_repeat_options(args):
+        return 2
     cases = _load_suites(root, [name for name, _ in targets])
     if cases is None:
         return 2
@@ -444,7 +446,20 @@ def cmd_run(args) -> int:
     return rc
 
 
+def _bad_repeat_options(args) -> bool:
+    """True after printing the error when the repeat flags contradict
+    each other (see runner.check_repeat_options)."""
+    try:
+        runner_mod.check_repeat_options(args.repeat, args.min_pass_rate)
+    except ValueError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return True
+    return False
+
+
 def cmd_diff(args) -> int:
+    if _bad_repeat_options(args):
+        return 2
     root = _demo_root(args) if args.demo else args.root
     r1, rc = _run_or_error(root, args.prompt, args.v1, args)
     if r1 is None:

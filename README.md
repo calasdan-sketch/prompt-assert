@@ -144,8 +144,8 @@ YAML's escapes: `\n` `\t` `\r` `\"` `\\` `\/` `\0` `\a` `\b` `\v` `\f` `\e`
 `\N` `\_` `\L` `\P`, a backslash and a space, and `\xE9`, `\u00e9` and
 `\U0001F600` (2, 4 and 8 hex digits: how PyYAML writes an accented letter or
 an emoji). Any other backslash there is a line-numbered error, never kept as
-text: a Windows path needs `\\` for each backslash (`"C:\\Users\\dan"`), or
-single quotes (`'C:\Users\dan'`), and half of a surrogate pair (`\ud83d` on
+text: a Windows path needs `\\` for each backslash (`"C:\\Users\\sam"`), or
+single quotes (`'C:\Users\sam'`), and half of a surrogate pair (`\ud83d` on
 its own) is not a character. Single-quoted strings are literal, except that
 `''` is one apostrophe (`'it''s'` is `it's`); plain and block scalars have no
 escapes at all. The cases file is read by a small built-in YAML subset
@@ -301,8 +301,12 @@ than it is stored. Everything prompt-assert prints goes through one filter
 that shows each such character as a visible escape (`\x1b[2K`, `\r`,
 `\u202e`) and leaves every other character alone, accents, scripts and
 emoji included. The set is every Unicode control, format, surrogate and
-line/paragraph separator character, bar tab and line feed; a test checks
-it against Python's Unicode database. `--format json` is unaffected: JSON
+line/paragraph separator character, bar tab and line feed (a test checks
+it against Python's Unicode database), plus the characters that print as
+nothing although Unicode files them elsewhere: the variation selectors,
+which can smuggle hidden data, and the Hangul fillers. One cost: an emoji
+written with a presentation selector (a red heart is U+2764 followed by
+U+FE0F) shows the escape `\ufe0f` after it. `--format json` is unaffected: JSON
 escapes those characters itself, and the text in it is the reply as the
 model sent it.
 
@@ -363,13 +367,19 @@ sentiment.v1: ...
 - The default `--min-pass-rate` is 1 (every run). It takes a fraction
   (`0.8`) or a percentage (`80%`), above 0 and at most 1; the runs needed
   are rounded up (`0.8` of 5 is 4, `2/3` of 3 is 2), and never fewer than
-  one. A failing case shows its first failing run.
-- `--repeat` is 1 to 1000; it costs that many calls per case. `diff` takes
+  one. `--min-pass-rate` below 1 without `--repeat` (above 1) is a usage
+  error, exit 2: a single run must pass whatever the rate says.
+- A case shows a run that agrees with its verdict: the first failing run
+  when it failed, the first passing run when it passed the gate.
+- `flaky` means one thing: the case passed the gate although some of its
+  runs failed. A case that failed the gate is a failure, never flaky.
+- `--repeat` is a whole number from 1 to 1000 (ASCII digits); it costs that many calls per case. `diff` takes
   both flags too.
 - Each run has its own cache entry (run 1 shares the entry of a plain run),
   so a re-run reads the same N answers back and pays nothing. Add
   `--no-cache` to draw fresh samples.
-- `--format json` gives every repeated case `runs`, `passes` and `flaky`.
+- `--format json` gives every repeated case `runs`, `passes` and `flaky`
+  (same meaning as above).
 
 ## Caching
 
@@ -434,7 +444,9 @@ natively; on GitHub Actions use a test-report action. A relative `PATH` is
 relative to the current directory (not `--root`). The file is written
 whole or not at all (written beside the target and moved into place); a
 report that cannot be written is exit 2, so CI never goes green without
-the file it was told to expect. Text from the model is cleaned of
+the file it was told to expect. A model that cannot answer stops the run
+with exit 2 before any report is written, so there is no file then (the
+job fails all the same). Text from the model is cleaned of
 characters XML cannot hold, so the report always parses.
 
 ### Exit codes

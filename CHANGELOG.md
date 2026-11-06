@@ -23,6 +23,23 @@
 - Each case result now records its wall-clock time (used by the JUnit
   report).
 - Project URLs now point at github.com/calasdan-sketch/prompt-assert.
+- Panel review fixes:
+  - A repeated case that passed the gate now shows a passing run (it showed
+    the first failing run, so JSON had `passed: true` next to a failed
+    assertion); a case that failed shows its first failing run.
+  - `flaky` now means only "passed the gate although some runs failed", in
+    JSON as in the terminal (JSON also set it for cases that failed).
+  - `--min-pass-rate` below 1 without `--repeat` is a usage error (exit 2);
+    it used to be ignored without a word.
+  - The output filter also escapes variation selectors (U+FE00-FE0F,
+    U+E0100-E01EF, Mongolian U+180B-180D, U+180F) and Hangul fillers
+    (U+115F, U+1160, U+3164, U+FFA0). An emoji with a presentation
+    selector now shows `\ufe0f` after it.
+  - `--repeat` takes ASCII digits only (`²` gave a raw Python error).
+  - JUnit: a CaseResult carrying a model error (Python API) is written as
+    an `<error>` and counted in `errors`; the CLI writes no report when a
+    model error stops the run (documented).
+  - README Windows-path example uses a neutral user name.
 
 ## 0.2.0
 - Renamed: the project is now **prompt-assert** on PyPI (formerly promptregress; PyPI rejected that name as too similar to an existing project). Import package is `prompt_assert`; the primary command is `prompt-assert`.

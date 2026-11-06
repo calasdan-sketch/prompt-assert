@@ -1,5 +1,10 @@
 """JUnit XML report for `run --junit PATH`.
 
+A model error never reaches this report from the CLI: the run stops with
+exit 2 before any report is written (a CI job still fails, and no file is
+left that looks like a result). A CaseResult with `error` set - possible
+through the Python API - is written as an <error>, not a <failure>.
+
 CI systems read this format natively: GitLab shows it in the merge request,
 Jenkins and Azure Pipelines in the build, and GitHub Actions through a test
 report action. One <testsuite> per prompt version, one <testcase> per case;
@@ -26,8 +31,6 @@ MAX_OUTPUT_CHARS = 2000
 
 def _failure_text(r) -> tuple[str, str]:
     """(message, body) of a failed case's <failure>."""
-    if r.error:
-        return "model error", r.error
     lines = []
     if r.runs > 1:
         lines.append(f"passed {r.passes}/{r.runs} runs")
@@ -44,21 +47,27 @@ def _failure_text(r) -> tuple[str, str]:
 
 def build(suites) -> ET.Element:
     """<testsuites> for [(prompt name, version, [CaseResult ...]) ...]."""
-    total = failures = 0
+    total = failures = errors = 0
     seconds = 0.0
     root = ET.Element("testsuites", name="prompt-assert")
     for name, version, results in suites:
         suite_name = clean_xml(f"{name}.{version}")
-        n_fail = sum(1 for r in results if not r.passed)
+        n_err = sum(1 for r in results if r.error)
+        n_fail = sum(1 for r in results if not r.passed and not r.error)
         t = sum(r.seconds for r in results)
         ts = ET.SubElement(root, "testsuite", name=suite_name,
                            tests=str(len(results)), failures=str(n_fail),
-                           errors="0", skipped="0", time=f"{t:.3f}")
+                           errors=str(n_err), skipped="0", time=f"{t:.3f}")
         for r in results:
             tc = ET.SubElement(ts, "testcase", classname=suite_name,
                                name=clean_xml(r.name),
                                time=f"{r.seconds:.3f}")
-            if not r.passed:
+            if r.error:
+                error = ET.SubElement(tc, "error",
+                                      message=clean_xml(r.error)[:500],
+                                      type="ModelError")
+                error.text = clean_xml(r.error)
+            elif not r.passed:
                 message, body = _failure_text(r)
                 failure = ET.SubElement(tc, "failure",
                                         message=clean_xml(message)[:500],
@@ -70,10 +79,11 @@ def build(suites) -> ET.Element:
                                      f"runs")
         total += len(results)
         failures += n_fail
+        errors += n_err
         seconds += t
     root.set("tests", str(total))
     root.set("failures", str(failures))
-    root.set("errors", "0")
+    root.set("errors", str(errors))
     root.set("time", f"{seconds:.3f}")
     return root
 

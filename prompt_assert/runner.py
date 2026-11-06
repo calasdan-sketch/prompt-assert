@@ -16,6 +16,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import sys
 import time
 
@@ -71,8 +72,10 @@ class CaseResult:
     cached: bool = False
     error: str = ""
     #: With --repeat: how many times the case was run and how many of those
-    #: runs passed. output and assertions are those of the first failing
-    #: run (of the first run when none failed).
+    #: runs passed. output and assertions are those of a run that agrees
+    #: with the verdict: the first failing run when the case failed, the
+    #: first passing run when it passed (so `passed` and the assertions
+    #: shown never contradict each other).
     runs: int = 1
     passes: int | None = None
     #: Wall-clock seconds spent on the case, model and judge calls included.
@@ -80,8 +83,10 @@ class CaseResult:
 
     @property
     def flaky(self) -> bool:
-        """Passed and failed across its runs (only with --repeat)."""
-        return self.runs > 1 and 0 < (self.passes or 0) < self.runs
+        """Passed the --min-pass-rate gate although some of its runs failed.
+        A case that failed the gate is a failure, not flaky."""
+        return (self.passed and self.runs > 1
+                and 0 < (self.passes or 0) < self.runs)
 
     def as_dict(self) -> dict:
         d = {
@@ -257,7 +262,9 @@ MAX_REPEAT = 1000
 def parse_repeat(value) -> int:
     """--repeat: a whole number of runs per case, 1 to MAX_REPEAT."""
     text = str(value).strip()
-    if not text.isdigit() or not 1 <= int(text) <= MAX_REPEAT:
+    # ASCII digits only: str.isdigit() also says yes to "²" (which int()
+    # then refuses with a raw Python error) and to other scripts' digits
+    if not re.fullmatch(r"[0-9]+", text) or not 1 <= int(text) <= MAX_REPEAT:
         raise ValueError(f"must be a whole number from 1 to {MAX_REPEAT}, "
                          f"got {value!r}")
     return int(text)
@@ -279,6 +286,16 @@ def parse_pass_rate(value) -> float:
         raise ValueError(f"must be above 0 and at most 1 (or 100%), "
                          f"got {value!r}")
     return rate
+
+
+def check_repeat_options(repeat: int, min_pass_rate: float) -> None:
+    """ValueError for a pass rate below 1 with a single run: one run must
+    pass whatever the rate says, so the rate would be ignored without a
+    word."""
+    if repeat == 1 and min_pass_rate < 1:
+        raise ValueError(
+            "--min-pass-rate below 1 needs --repeat N with N above 1: a "
+            "single run must pass whatever the rate, so it would be ignored")
 
 
 def required_passes(runs: int, rate: float) -> int:
@@ -306,9 +323,10 @@ def _repeat_case(root, prompt_name, version, prompt_text, case, model_kw,
         only.seconds = time.monotonic() - started
         return only
     passes = sum(1 for r in runs if r.passed)
-    shown = next((r for r in runs if not r.passed), runs[0])
+    passed = passes >= required_passes(repeat, min_pass_rate)
+    shown = next((r for r in runs if r.passed == passed), runs[0])
     return dataclasses.replace(
-        shown, passed=passes >= required_passes(repeat, min_pass_rate),
+        shown, passed=passed,
         cached=all(r.cached for r in runs), runs=repeat, passes=passes,
         seconds=time.monotonic() - started)
 
@@ -335,6 +353,7 @@ def run_suite(root: str, prompt_name: str, version: str,
     """
     repeat = parse_repeat(repeat)
     min_pass_rate = parse_pass_rate(min_pass_rate)
+    check_repeat_options(repeat, min_pass_rate)
     prompt_text = suite_mod.load_prompt(root, prompt_name, version)
     cases = cases if cases is not None else suite_mod.load_cases(root,
                                                                  prompt_name)

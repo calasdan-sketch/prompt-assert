@@ -16,6 +16,13 @@ report is made of lines. The set is every character Unicode classes as a
 control (Cc), a format character (Cf, which holds the bidi controls and the
 zero-width characters), a surrogate (Cs) or a line / paragraph separator
 (Zl, Zp); tests/test_synapse1.py checks it against unicodedata.
+
+Added to that set: characters that print as nothing although Unicode files
+them elsewhere - the variation selectors (U+FE00-FE0F, U+E0100-E01EF and
+the Mongolian ones, U+180B-180D and U+180F), which can carry hidden data
+("emoji smuggling"), and the Hangul fillers (U+115F, U+1160, U+3164,
+U+FFA0). The price: an emoji written with its presentation selector (a red
+heart is U+2764 U+FE0F) shows as the emoji followed by `\ufe0f`.
 """
 
 from __future__ import annotations
@@ -26,6 +33,9 @@ import re
 # (generated from unicodedata; kept literal so importing costs nothing).
 _RANGES = (
     (0x0, 0x8), (0xb, 0x1f), (0x7f, 0x9f), (0xad, 0xad), (0x600, 0x605),
+    # invisible but not Cc/Cf: Hangul fillers, variation selectors
+    (0x115f, 0x1160), (0x180b, 0x180d), (0x180f, 0x180f), (0x3164, 0x3164),
+    (0xfe00, 0xfe0f), (0xffa0, 0xffa0), (0xe0100, 0xe01ef),
     (0x61c, 0x61c), (0x6dd, 0x6dd), (0x70f, 0x70f), (0x890, 0x891),
     (0x8e2, 0x8e2), (0x180e, 0x180e), (0x200b, 0x200f), (0x2028, 0x202e),
     (0x2060, 0x2064), (0x2066, 0x206f), (0xd800, 0xdfff), (0xfeff, 0xfeff),
