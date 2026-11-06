@@ -24,7 +24,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install prompt-assert (stdlib only, no other dependencies)
-        run: pip install git+https://github.com/calasdan-sketch/promptregress
+        run: pip install git+https://github.com/calasdan-sketch/prompt-assert
       - name: Prompt regression tests (demo mode, fake model)
         run: prompt-assert --demo run --prompt sentiment --version v1
       # Real model instead of the demo: every prompt x every version in one

@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "prompt-assert"
-version = "0.2.0"
-description = "Pytest for prompts: catch LLM regressions before your users do."
+version = "0.3.0"
+description = "Pytest for prompts: catch LLM regressions in CI before your users do. Zero dependencies."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
@@ -26,9 +26,9 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/calasdan-sketch/promptregress"
-Repository = "https://github.com/calasdan-sketch/promptregress"
-Issues = "https://github.com/calasdan-sketch/promptregress/issues"
+Homepage = "https://github.com/calasdan-sketch/prompt-assert"
+Repository = "https://github.com/calasdan-sketch/prompt-assert"
+Issues = "https://github.com/calasdan-sketch/prompt-assert/issues"
 
 [project.scripts]
 prompt-assert = "prompt_assert.cli:main"

@@ -1,6 +1,8 @@
 # What setuptools leaves out of the sdist and the tests read: the CI workflow
-# and the example workflow (TestPythonVersionClaims). Every module under tests/
+# and the example workflow (TestPythonVersionClaims), and the changelog
+# (test_synapse1 scans it for hidden characters). Every module under tests/
 # goes in, so an unpacked sdist runs its own tests.
 include .github/workflows/ci.yml
 include examples/prompt-assert-example.yml
+include CHANGELOG.md
 recursive-include tests *.py
