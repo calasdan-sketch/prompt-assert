@@ -9,9 +9,9 @@
   "replay_reproduces_recorded_run_exactly": true,
   "wall_clock_ms_per_call_simulated": 10,
   "wall_clock_seconds_machine_dependent": {
-   "--jobs 1": 2.06,
-   "--jobs 8": 0.26,
-   "speedup": 7.9
+   "--jobs 1": 2.14,
+   "--jobs 8": 0.28,
+   "speedup": 7.6
   }
  },
  "detection": {
@@ -136,5 +136,31 @@
     "regression_detected": 1.0
    }
   ]
+ },
+ "reply_shapes": {
+  "fenced_json": {
+   "contains_json_wrongly_accepted": 0,
+   "contains_json_wrongly_rejected": 0,
+   "good": 6,
+   "schema_wrongly_accepted": 0,
+   "schema_wrongly_rejected": 5,
+   "wrong": 4
+  },
+  "json": {
+   "before_wrongly_accepted": 4,
+   "before_wrongly_rejected": 0,
+   "now_wrongly_accepted": 0,
+   "now_wrongly_rejected": 0,
+   "safe": 6,
+   "unsafe": 4
+  },
+  "links": {
+   "before_caught": 4,
+   "before_false_alarms": 0,
+   "harmless": 6,
+   "hostile": 8,
+   "now_caught": 8,
+   "now_false_alarms": 0
+  }
  }
 }

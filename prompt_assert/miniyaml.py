@@ -333,7 +333,9 @@ def _check_value(val: str, lineno: int, in_flow: bool = False):
             raise _err(f"unterminated quoted string: {v!r}", lineno)
         return
     if c0 == "{":
-        raise _err("flow-style maps ({...}) are not supported", lineno)
+        raise _err("flow-style maps ({...}) are not supported - write the map "
+                   "one key per line; a schema can be pasted as JSON text "
+                   "under `schema: |`", lineno)
     if c0 == "[":
         if in_flow:
             raise _err("nested flow collections are not supported", lineno)

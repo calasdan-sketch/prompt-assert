@@ -526,7 +526,8 @@ LINK_REPLIES = [
     ("Email support at the usual address.", False),
 ]
 
-#: (reply, parses_the_way_a_browser_or_node_would)
+#: (reply, is_portable_json): NaN, Infinity, an overflowing number and a
+#: repeated name are accepted by Python's parser but are not portable JSON.
 JSON_REPLIES = [
     ('{"score": NaN}', False),
     ('{"limit": Infinity}', False),
@@ -673,7 +674,7 @@ def markdown(res: dict) -> str:
            f"{ln['before_caught']} | {ln['now_caught']} |"),
           (f"| `no_urls`: harmless replies flagged (of {ln['harmless']}) | "
            f"{ln['before_false_alarms']} | {ln['now_false_alarms']} |"),
-          (f"| `json_valid`: replies a browser parser rejects but it "
+          (f"| `json_valid`: replies that are not portable JSON but it "
            f"accepted (of {js['unsafe']}) | {js['before_wrongly_accepted']} | "
            f"{js['now_wrongly_accepted']} |"),
           (f"| `json_valid`: valid JSON it rejected (of {js['safe']}) | "

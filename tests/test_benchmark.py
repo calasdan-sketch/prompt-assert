@@ -48,6 +48,19 @@ class TestBenchmark(unittest.TestCase):
             0)
         self.assertTrue(c["replay_reproduces_recorded_run_exactly"])
 
+    def test_the_reply_shape_claims(self):
+        r = self.res["reply_shapes"]
+        ln, js, fj = r["links"], r["json"], r["fenced_json"]
+        self.assertEqual(ln["now_caught"], ln["hostile"])
+        self.assertLess(ln["before_caught"], ln["now_caught"])
+        self.assertEqual(ln["now_false_alarms"], 0)
+        self.assertEqual(js["now_wrongly_accepted"], 0)
+        self.assertEqual(js["now_wrongly_rejected"], 0)
+        self.assertEqual(js["before_wrongly_accepted"], js["unsafe"])
+        self.assertEqual(fj["contains_json_wrongly_rejected"], 0)
+        self.assertEqual(fj["contains_json_wrongly_accepted"], 0)
+        self.assertGreater(fj["schema_wrongly_rejected"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

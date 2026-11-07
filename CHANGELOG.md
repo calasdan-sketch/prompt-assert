@@ -1,7 +1,58 @@
 # Changelog
 
 ## 0.4.0 (unreleased)
-Expert round 2. All 366 earlier tests pass; 2 were edited (below).
+
+### Expert round 3 (on top of round 2, below)
+Tests 425 -> 471; two earlier tests edited and one timing bound loosened (see
+"Changed behaviour").
+- JSON: `json_valid` and `schema` refuse `NaN`, `Infinity`, numbers that
+  overflow, and objects with a repeated name (Python's parser accepted all).
+- `schema` now enforces `additionalProperties`, `minimum`, `maximum`,
+  `exclusiveMinimum`, `exclusiveMaximum`, `minLength`, `maxLength`, `pattern`,
+  `minItems`, `maxItems`, `uniqueItems`, `const`, `anyOf`, `oneOf`, `allOf`;
+  other keywords are still refused. A schema may be pasted as JSON text.
+  Checking stops after 20 problems, so a huge wrong reply is fast.
+- New assertions: `contains_json` (JSON in a fence or in prose, optional
+  schema), `not` (turns any deterministic assertion around), `not_equals`,
+  `max_chars`, `min_chars`, `max_words`, `min_words`, `max_lines`.
+- System prompts and conversations: a prompt file starting with `[[system]]`,
+  `[[user]]` or `[[assistant]]` is sent as chat messages. The turns are cut
+  before input is filled in, so an input cannot forge a turn. Cassettes, the
+  cache, `plan` and `no_prompt_leak` follow the conversation.
+- `no_urls` also finds protocol-relative links (`//host/x.png`) and
+  `javascript:`, `vbscript:` and `data:` URIs (no allow-list can pass them).
+- A `regex`, `not_regex` or schema `pattern` that repeats a repeat without a
+  limit (`(a+)+$`, `(\w+\s?)*`) is refused when the file is read: it can hang
+  a run for hours and Python cannot interrupt it. Polynomial patterns are
+  not detected (documented).
+- Markdown report: case names, assertion details and replies are escaped so a
+  reply or a pull request's case file cannot put links, images or HTML into
+  the summary.
+- `--record` prints how many answers are new, changed or unchanged against
+  the file it replaces, and warns about personal data in recorded replies.
+- Prompt and version names must be plain names (`--prompt ../x` is exit 2).
+- Fixes: a byte-order mark in a prompt file was sent to the model (and made
+  the cassette key differ); a long assertion is cut in the failure report;
+  `--changed-since` reads git's output as UTF-8; the YAML flow-map error now
+  says how to write a schema.
+- Benchmark panel 4: labelled replies judged before and after (links, JSON,
+  fenced JSON). `results.json` and `RESULTS.md` regenerated; panels 1-3 are
+  unchanged.
+- Changed behaviour: (1) `{{name}}` is filled in one pass, so a case input
+  that contains `{{tone}}` is no longer rewritten by the case's `vars`;
+  (2) values `json_valid` accepted before (NaN, duplicate keys) now fail;
+  (3) a nested-repeat regex that used to load is now exit 2; (4) a failing
+  summary line in the Markdown report shows a case name without table
+  escaping (it is HTML-escaped instead). Edited tests:
+  `test_round5_fixes.py` (keywords that are now enforced moved off the
+  "refused" list), `test_expert2.py` (the Markdown pipe check; the `--jobs`
+  speed bound 2.5x -> 2x, it failed on a busy machine).
+- Not done: a refusal assertion, XML/HTML/SQL checks, a model-driven
+  multi-turn run, tool calls, SARIF, `$ref`/`format` in schemas, a GitHub
+  Action wrapper, a schema read from a file.
+
+### Expert round 2
+All 366 earlier tests pass; 2 were edited (below).
 - Cassettes: `run --record` writes `prompts/<name>.cassette.json`,
   `run --replay` answers every call from it and contacts no model (needs no
   URL or key); a missing recording, a missing or damaged cassette is exit 2.

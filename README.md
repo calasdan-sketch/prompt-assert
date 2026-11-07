@@ -52,7 +52,8 @@ pip install prompt-assert
 
 That is the last release on PyPI (0.2.0). This branch is 0.4.0 (unreleased:
 cassettes, security assertions, `plan` and budgets, `--jobs`, `--tag`,
-`--changed-since`, Markdown and GitHub reports, on top of 0.3.0's `--repeat`,
+`--changed-since`, Markdown and GitHub reports, system/user/assistant prompts,
+a fuller `schema` and `contains_json`, on top of 0.3.0's `--repeat`,
 `--junit` and `diff --fail-on-regression`); until it is released, install it
 from the repository:
 
@@ -220,9 +221,11 @@ assertion fails that case with `bad assertion: ...`, it never crashes the run.
 
 ## Assertions (deterministic, no LLM)
 
-`contains` · `not_contains` · `icontains` · `equals` · `contains_any` ·
-`contains_all` · `regex` · `not_regex` · `starts_with` · `ends_with` ·
-`json_valid` · `schema` · `max_tokens` · `min_tokens`, and the
+`contains` · `not_contains` · `icontains` · `equals` · `not_equals` ·
+`contains_any` · `contains_all` · `regex` · `not_regex` · `starts_with` ·
+`ends_with` · `json_valid` · `schema` · `contains_json` · `max_tokens` ·
+`min_tokens` · `max_chars` · `min_chars` · `max_words` · `min_words` ·
+`max_lines` · `not` (any of them turned around), and the
 [security assertions](#security-assertions-and-the-injection-corpus)
 `no_pii` · `no_secrets` · `no_hidden_chars` · `no_urls` · `no_prompt_leak`.
 
@@ -245,22 +248,63 @@ assert:
   error.
 
 - `json_valid: true` wants a reply that parses as JSON; `json_valid: false`
-  wants one that does not. Anything but true or false is an error.
+  wants one that does not. Anything but true or false is an error. It is
+  stricter than Python's parser, on purpose: `NaN` and `Infinity` are not
+  JSON (the number grammar of
+  [RFC 8259](https://www.rfc-editor.org/rfc/rfc8259#section-6) has neither), a
+  number that overflows (`1e999`) becomes infinity or an error depending on the
+  parser, and an object with the same name twice is
+  [unpredictable](https://www.rfc-editor.org/rfc/rfc8259#section-4) (most keep
+  the last pair, some fail, some keep both), so all of them fail. (Before round 3
+  they passed.) A reply wrapped in a
+  code fence or in a sentence is not JSON either; that is what
+  `contains_json` is for.
+- `contains_json: true` wants a JSON object or array somewhere in the reply:
+  inside a ```` ```json ```` fence (tried first) or bare in the text (the
+  first 64 `{` or `[` are tried). `contains_json: {schema}` also checks the
+  first one found against the schema. Models like to answer "Sure! Here it is:"
+  and a fence, and `json_valid` fails that.
+- `not: {assertion}` turns any deterministic assertion around:
+  `not: {regex: "(?i)as an ai"}`, `not: {no_urls: true}`. It cannot wrap a
+  `judge` (a model's opinion) or another `not`.
+- `not_equals`, `max_chars` / `min_chars` (of the reply without its outer
+  whitespace), `max_words` / `min_words` (whitespace-separated), `max_lines`.
 - `schema` is a mini validator: `type` (one JSON type name, or a list of
-  them: `type: [integer, "null"]`), `enum`, `required`, `properties` and
-  `items`. `required`, `properties` and `items` apply to any object or array,
-  with or without a `type` beside them. `enum` compares as JSON does: `true`
+  them: `type: [integer, "null"]`), `enum`, `const`, `required`,
+  `properties`, `additionalProperties` (false, true or a schema), `items`,
+  `minimum` / `maximum` / `exclusiveMinimum` / `exclusiveMaximum`,
+  `minLength` / `maxLength`, `pattern`, `minItems` / `maxItems`,
+  `uniqueItems`, and `anyOf` / `oneOf` / `allOf`. `required`, `properties` and
+  `items` apply to any object or array,
+  with or without a `type` beside them. A bound applies to the type it is for
+  (`minimum` ignores a string), as in JSON Schema. The schema may be YAML, or
+  JSON text pasted as a block scalar (the cases-file reader has no `{...}`
+  maps, and a schema is usually JSON already):
+  ```yaml
+  - contains_json: |
+      {"type": "object", "required": ["label"], "additionalProperties": false,
+       "properties": {"label": {"enum": ["positive", "negative"]}}}
+  ```
+  `enum` compares as JSON does: `true`
   is not the number 1 (nor `false` the number 0), `1` equals `1.0`, and
   lists and objects are compared item by item the same way, in any key
-  order. A keyword beyond those (`minimum`, `pattern`,
-  `additionalProperties`, `oneOf` ...) would pass every reply whatever it
-  said, so it is an error, not ignored - and so is a type name JSON does not
+  order; `const` compares the same way. A keyword beyond those (`format`, `multipleOf`, `not`, `$ref`,
+  `patternProperties`, `minProperties`, `if` ...) would pass every reply
+  whatever it said, so it is an error, not ignored - and so is a type name JSON does not
   have (`str`, `int`: write `string`, `integer`). The annotations `title`,
   `description`, `$schema`, `default` and `examples` are accepted and
-  ignored.
+  ignored. `pattern` uses Python's regex search, where `$` also matches
+  before a final newline (JSON Schema's does not): write `\Z` to mean the end.
 - `max_tokens` / `min_tokens` use a rough estimate of one token per 4
   characters - a guardrail, not a tokenizer. An empty or blank reply is 0
   tokens, so `min_tokens: 1` fails it.
+
+A `regex`, `not_regex` or schema `pattern` that repeats a repeat without a limit
+(`(a+)+$`, `(\w+\s?)*`, `([a-z]+ ?)+`) is refused when the file is read: on a
+reply that almost matches, Python's regex engine can run for hours, nothing
+can interrupt it, and the reply is not yours to control. Write `a+` for
+`(a+)+`. (It looks at the shape of the pattern; it does not prove every other
+pattern fast.)
 
 Plus an optional LLM judge:
 
@@ -269,6 +313,32 @@ assert:
   - judge:
       rubric: "Output must be exactly one word: positive, negative, or neutral."
 ```
+
+## System prompts and conversations
+
+A prompt file is one user message by default. Start it with a role marker to
+send a conversation instead; each marker is alone on its line:
+
+```
+[[system]]
+You label sentiment. Answer with one word.
+
+[[user]]
+Review: {{input}}
+```
+
+`[[system]]` (first only), `[[user]]` and `[[assistant]]` turns; a few
+`[[user]]` / `[[assistant]]` pairs before the last `[[user]]` give the model
+worked examples. It must end with a `[[user]]` turn, which is where the case
+input usually goes. A file counts as a conversation only when its first
+non-blank line is a marker, so a plain prompt that mentions `[[system]]` is
+untouched. The turns are cut from the template before any input is put in, so
+a case input that contains `[[system]]` stays text in the user turn. A broken
+conversation (unknown role, empty turn, no final `[[user]]`) is exit 2 before
+any call. Cassettes, the cache, `plan` and `no_prompt_leak` all see the whole
+conversation (token estimates count the text of the turns). `{{input}}` and `vars` fill every turn, in one pass: text that
+a value brings in (an input saying `{{tone}}`) is never filled in again.
+(Before round 3 an input containing `{{tone}}` was filled by the case's `vars`.)
 
 ## Model endpoint
 
@@ -418,6 +488,12 @@ prompt-assert run --all --replay     # in CI: no model, no URL, no key, no cost
   `run --all --record` also drops recordings nothing asks for. `run --all
   --replay` notes recordings nothing used.
 - Not available with `--demo`.
+- `--record` ends with how the new answers compare with the file it
+  replaces: `recorded 12 answer(s) ... (0 new, 3 changed, 9 unchanged since
+  the last recording)`. "Changed" means the model said something different to
+  the same prompt: that is model drift, and `git diff` shows which. It also
+  warns when a recorded reply holds an email address, phone number, card, SSN
+  or SIN, since a cassette is committed.
 
 The cache key changed in 0.4.0: it is now the text sent plus the model and
 endpoint, not the whole case. Editing an assertion used to re-run every
@@ -514,7 +590,8 @@ limit of a GitHub comment is 65,536). `--github-annotations` prints an
 `::error file=prompts/<name>.cases.yaml` line per failed case and a
 `::warning` per flaky one (not with `--format json`). Everything that came
 from a model is cleaned first, so a reply cannot forge a report line or an
-annotation command.
+annotation command, and case names, assertion details and replies are
+escaped so they cannot become links, images, HTML or autolinks in the summary.
 
 ## Caching
 
@@ -651,9 +728,19 @@ What this tool does not do, so you do not find out the hard way:
 - Cassettes replay what a model said once. They prove your assertions still
   hold for those answers, not that the model would still say them: re-record
   on a schedule (or when the model changes) and read the diff.
-- Multi-turn conversations and tool calls are not supported: a case is one
-  user message and one text reply, and a reply that is only a tool call is
-  reported as an error.
+- A case is one scripted conversation and one text reply. A model-driven
+  multi-turn dialogue (the next user message depends on the last answer) and
+  tool calls are not supported; a reply that is only a tool call is reported
+  as an error.
+- The `no_urls` check finds `http(s)://`, `ftp://`, `www.`, protocol-relative
+  `//host` and `javascript:` / `vbscript:` / `data:` links; it does not decode
+  a link a reply spells out in pieces (`hxxp`, `example[.]com`, percent-encoded or
+  split across lines), and a reply that merely names a site in words is not a link.
+- Regexes: only the nested-repeat shape is refused (see Assertions); a
+  polynomial one such as `(a+b+)+$` is accepted and took about 40 seconds on
+  a 40,000-character reply here.
+- `contains_json` reads the first JSON value it finds (a fenced one first);
+  a reply with several is judged by that one.
 - The injection corpus and the security assertions are heuristics (see
   above); they are no substitute for a red-team.
 - The benchmark below uses a simulated model. It shows what the tool does with
@@ -676,7 +763,7 @@ not that the tool lacks it. Where they do more, it says so.
 |---|---|---|---|---|
 | Install | `pip`, Python stdlib only, no dependencies | Node.js CLI (`npx promptfoo@latest`) | `pip install deepeval` | `pip install inspect-ai` |
 | Usage telemetry | none: the only network calls go to the model endpoint you set | on by default, [`PROMPTFOO_DISABLE_TELEMETRY=1`](https://www.promptfoo.dev/docs/configuration/telemetry/) turns it off | on by default, [`DEEPEVAL_TELEMETRY_OPT_OUT=1`](https://deepeval.com/docs/faq) turns it off | not checked |
-| LLM-free assertions | 19 kinds (above), 5 of them security heuristics | [many more](https://www.promptfoo.dev/docs/configuration/expected-outputs/): `equals`, `is-json`, `is-sql`, ROUGE/BLEU, custom JS/Python, `not-` on any type ... | mostly LLM-judged metrics (40+); judge defaults to OpenAI unless you configure one ([FAQ](https://deepeval.com/docs/faq)) | built-in scorers incl. text match and model grading |
+| LLM-free assertions | 27 kinds (above), 5 of them security heuristics, `not` on any of them | [many more](https://www.promptfoo.dev/docs/configuration/expected-outputs/) (checked 2026-11-07): `equals`, `is-json` and `contains-json` (both with an optional JSON schema), `is-sql`, `is-xml`, `is-html`, `is-refusal`, ROUGE/BLEU, `levenshtein`, `latency`, `cost`, custom JS/Python, `not-` on any type ... | mostly LLM-judged metrics (40+); judge defaults to OpenAI unless you configure one ([FAQ](https://deepeval.com/docs/faq)) | built-in scorers incl. text match and model grading |
 | Install size, measured 2026-11-07 | about 0.3 MB, 2 s, no dependencies | `npm install promptfoo` 0.125.1 (MIT): 26 s, 734 MB, 413 packages in `node_modules` | `pip install deepeval` 4.3.3: 13 s, 105 MB, 66 distributions | wheel 0.3.288 alone is 35 MB with 40 required dependencies (`pip download --no-deps`; full install not measured) |
 | Answers committed to git and replayed in CI | yes: `--record` / `--replay` ([above](#ci-that-costs-nothing-cassettes)); a miss is exit 2 | local on-disk [cache](https://www.promptfoo.dev/docs/configuration/caching/); a committed replay mode was not found in its docs (unverified) | not checked | not checked |
 | Know the cost first | `plan`, `--max-calls` / `--max-input-tokens` / `--max-cost` stop before the first request | not checked | not checked | not checked |
@@ -726,8 +813,20 @@ call). `--early-stop` gives the same verdicts with 37.2 calls per run instead
 of 60 (60% gate) or 49.4 instead of 60 (80% gate). On a 200-case suite,
 editing one assertion costs 200 model calls with the 0.3.0 cache key and 0 now; a
 CI run with a committed cassette costs 0 calls and reproduces the recorded
-run exactly; with a simulated 10 ms per call `--jobs 8` was 7.9x faster than
+run exactly; with a simulated 10 ms per call `--jobs 8` was 7.6x faster than
 one at a time on the machine that wrote the file (timing varies by machine).
+
+A fourth panel judges 14 hand-labelled replies for links, 10 for JSON and 10
+for structured answers, by the checks as they were before the third expert
+round (reconstructed in the script from the previous code) and as they are
+now: `no_urls` caught 4 of 8 hostile links before and catches 8 of 8 now
+(protocol-relative `//host`, `javascript:` and `data:` links were missed), with 0 of 6
+harmless replies flagged either way; `json_valid` accepted all 4 replies that
+are not portable JSON (`NaN`, `Infinity`, `1e999`, a repeated name) and now
+accepts none; a `schema` rejected 5 of 6 good answers that had their JSON in
+a code fence or a sentence, `contains_json` rejects none and still rejects
+all 4 wrong ones. The labels are ours; 14 and 10 replies show a behaviour,
+not a rate.
 
 ## Tests
 

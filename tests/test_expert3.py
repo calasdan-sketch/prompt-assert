@@ -10,7 +10,7 @@ import json
 import os
 import unittest
 
-from prompt_assert import asserts, cassette, report, runner, scan, suite
+from prompt_assert import asserts, report, runner, scan, suite
 
 from .test_expert2 import Base, cases_yaml
 from .test_synapse1 import run_cli
@@ -255,8 +255,6 @@ class TestLinks(unittest.TestCase):
                            ("data:text/html;base64,AAAA", "data:"),
                            ("VBScript:run", "vbscript:")):
             self.assertEqual(self.hosts(text), [host], text)
-        ok, _ = ev({"no_urls": ["javascript:", "example.com"]}, "x") \
-            if False else (True, "")
         self.assertFalse(ev({"no_urls": ["example.com"]},
                             "[x](javascript:alert(1))")[0])
         # prose that merely mentions the words is not a link
@@ -444,8 +442,7 @@ class TestRecordingSaysWhatChanged(Base):
         self.assertIn("0 new, 0 changed, 2 unchanged", err)
         url2, _ = self.server("good again")
         base[base.index("--base-url") + 1] = url2
-        code, _, err = run_cli(base[:-1] + ["--record",
-                                            "--no-cache"][:1])
+        code, _, err = run_cli(base)
         self.assertIn("2 changed", err)
         self.assertIn("differ from the last recording", err)
 

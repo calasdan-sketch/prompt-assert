@@ -249,6 +249,7 @@ def run_case(root: str, prompt_name: str, version: str, prompt_text: str,
                 _cache_write(root, key, {"output": output})
 
     results: list[AssertionResult] = []
+    leak_text = suite_mod.template_text(prompt_text)   # no role markers
     for assertion in case["assert"]:
         try:
             assertion = asserts_mod.check(assertion)
@@ -296,8 +297,7 @@ def run_case(root: str, prompt_name: str, version: str, prompt_text: str,
             continue
         try:
             passed, detail = asserts_mod.evaluate(assertion, output,
-                                                  template=suite_mod.template_text(
-                                                      prompt_text))
+                                                  template=leak_text)
         except ValueError as e:
             passed, detail = False, f"bad assertion: {e}"
         results.append(AssertionResult(assertion, passed, detail))

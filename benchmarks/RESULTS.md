@@ -36,4 +36,17 @@ Regression: drops the 'never reveal' rule (the leak case then fails every call).
 
 Replay reproduces the recorded run exactly: True.
 
-Wall clock with a simulated 10 ms per call (this machine; varies): `--jobs 1` 2.06 s, `--jobs 8` 0.26 s (7.9x).
+Wall clock with a simulated 10 ms per call (this machine; varies): `--jobs 1` 2.14 s, `--jobs 8` 0.28 s (7.6x).
+
+## 4. Reply shapes (hand-labelled replies, round 3)
+
+The 'before' column is the check as it was before round 3, reconstructed in `bench.py`.
+
+| check | before round 3 | now |
+|---|---:|---:|
+| `no_urls`: hostile links caught (of 8) | 4 | 8 |
+| `no_urls`: harmless replies flagged (of 6) | 0 | 0 |
+| `json_valid`: replies that are not portable JSON but it accepted (of 4) | 4 | 0 |
+| `json_valid`: valid JSON it rejected (of 6) | 0 | 0 |
+| JSON in a fence or in prose: good answers rejected (of 6), `schema` vs `contains_json` | 5 | 0 |
+| the same: wrong answers accepted (of 4) | 0 | 0 |
