@@ -296,7 +296,8 @@ def run_case(root: str, prompt_name: str, version: str, prompt_text: str,
             continue
         try:
             passed, detail = asserts_mod.evaluate(assertion, output,
-                                                  template=prompt_text)
+                                                  template=suite_mod.template_text(
+                                                      prompt_text))
         except ValueError as e:
             passed, detail = False, f"bad assertion: {e}"
         results.append(AssertionResult(assertion, passed, detail))

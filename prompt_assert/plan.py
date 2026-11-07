@@ -88,7 +88,7 @@ def compute(root, targets, cases_by_name, model_kw, use_cache, repeat,
                 if live:
                     row["live_calls"] += 1
                     row["input_tokens"] += asserts_mod.estimate_tokens(
-                        rendered)
+                        suite_mod.plain_text(rendered))
                     row["judge_calls_max"] += judges
                 else:
                     row["answered"] += 1

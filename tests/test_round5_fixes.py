@@ -752,11 +752,14 @@ class TestSchemaChecksWhatItSays(unittest.TestCase):
         self.assertIn("integer or null", detail)
 
     def test_a_constraint_the_validator_cannot_enforce_is_refused(self):
-        for key, value in (("minimum", 5), ("maximum", 9), ("pattern", "^a"),
-                           ("additionalProperties", False),
-                           ("oneOf", [{"type": "string"}]),
-                           ("minItems", 1), ("maxLength", 3), ("format", "uri"),
-                           ("const", 1)):
+        # (0.4.0 round 3 now enforces minimum, maximum, pattern,
+        # additionalProperties, oneOf, minItems, maxLength and const)
+        for key, value in (("format", "uri"), ("multipleOf", 2),
+                           ("not", {"type": "string"}),
+                           ("patternProperties", {"^a": {}}),
+                           ("minProperties", 1), ("unevaluatedItems", False),
+                           ("dependentRequired", {"a": ["b"]}),
+                           ("if", {"type": "string"})):
             with self.subTest(key):
                 with self.assertRaisesRegex(
                         ValueError, rf"schema: '{key}' is not supported"):
@@ -864,8 +867,8 @@ BAD_CASES = (
      ("assert[0]", "schema.type: unknown type 'str'", "string")),
     ("a schema keyword that is not enforced",
      "input: hi\nassert:\n  - schema:\n      type: integer\n"
-     "      minimum: 5",
-     ("assert[0]", "schema: 'minimum' is not supported")),
+     "      multipleOf: 5",
+     ("assert[0]", "schema: 'multipleOf' is not supported")),
     ("an unknown key in the case",
      "input: hi\nvarss:\n  tone: terse\nassert:\n  - contains: x",
      ("unknown key 'varss'", "did you mean 'vars'")),

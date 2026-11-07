@@ -14,6 +14,14 @@ Supported assertions (each is a one-key dict in the case's `assert` list):
   json_valid: true         output parses as JSON (false: it does NOT)
   schema: {...}            parsed JSON validates (mini validator below)
   max_tokens: n / min_tokens: n   ~chars/4 token estimate (documented)
+  not_equals: str          the whole output is anything but str
+  max_chars / min_chars: n   characters of the output, outer whitespace aside
+  max_words / min_words: n   whitespace-separated words
+  max_lines: n             non-blank-trimmed lines (an empty reply has 0)
+  contains_json: true | {schema}   a JSON object or array somewhere in the
+                           reply (a ```json fence is read); optionally one
+                           that validates against the schema
+  not: {assertion}         the assertion must NOT hold (any but judge)
 
 Security assertions (heuristics, see scan.py; they never echo what they find):
 
@@ -49,6 +57,71 @@ import re
 from . import miniyaml, scan
 
 
+def _no_constant(name: str):
+    raise ValueError(f"{name} is not JSON (JSON has no NaN or Infinity)")
+
+
+def _no_duplicates(pairs):
+    out = {}
+    for key, value in pairs:
+        if key in out:
+            raise ValueError(f"duplicate key {key!r} (parsers disagree on "
+                             f"which value wins)")
+        out[key] = value
+    return out
+
+
+def _strict_float(text: str):
+    value = float(text)
+    if value in (float("inf"), float("-inf")):
+        raise ValueError(f"{text[:20]} is too large for a number")
+    return value
+
+
+_STRICT = dict(parse_constant=_no_constant, parse_float=_strict_float,
+               object_pairs_hook=_no_duplicates)
+
+
+def parse_json(text: str):
+    """json.loads, but strict where Python is lenient: NaN, Infinity and
+    -Infinity are refused (they are not JSON, and JSON.parse rejects them), so
+    are numbers that overflow to infinity, and so is an object with the same
+    key twice. ValueError (RecursionError for a document nested too deep)."""
+    return json.loads(text, **_STRICT)
+
+
+#: contains_json looks at this many starting points ({ or [) at most.
+JSON_CANDIDATES = 64
+_FENCE = re.compile(r"```[ \t]*([A-Za-z0-9_-]*)[ \t]*\r?\n(.*?)```", re.DOTALL)
+
+
+def find_json(text: str):
+    """The first JSON object or array in `text`: in a code fence if there is
+    one that holds JSON, else wherever one starts. Returns (found, value);
+    at most JSON_CANDIDATES starting points are tried."""
+    for m in _FENCE.finditer(text):
+        if m.group(1).lower() not in ("", "json", "jsonc"):
+            continue
+        try:
+            value = parse_json(m.group(2))
+        except (ValueError, RecursionError):
+            continue
+        if isinstance(value, (dict, list)):
+            return True, value
+    decoder = json.JSONDecoder(**_STRICT)
+    tried = 0
+    for m in re.finditer(r"[\[{]", text):
+        tried += 1
+        if tried > JSON_CANDIDATES:
+            break
+        try:
+            value, _ = decoder.raw_decode(text, m.start())
+        except (ValueError, RecursionError):
+            continue
+        return True, value
+    return False, None
+
+
 def estimate_tokens(text: str) -> int:
     """Rough token estimate: ~4 chars per token. Documented as approximate;
     use only for guardrail assertions, never billing. An empty or blank text
@@ -70,7 +143,13 @@ _TYPE_HINTS = {"str": "string", "text": "string", "int": "integer",
 #: What the validator enforces. Any other keyword would pass every reply, so
 #: it is an error (check_schema), except these notes that say nothing a
 #: reply could break.
-SCHEMA_KEYWORDS = ("type", "enum", "required", "properties", "items")
+SCHEMA_KEYWORDS = ("type", "enum", "required", "properties", "items",
+                   "additionalProperties", "minimum", "maximum",
+                   "exclusiveMinimum", "exclusiveMaximum", "minLength",
+                   "maxLength", "pattern", "minItems", "maxItems",
+                   "uniqueItems", "const", "anyOf", "oneOf", "allOf")
+_NUMBER_KEYS = ("minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum")
+_COUNT_KEYS = ("minLength", "maxLength", "minItems", "maxItems")
 _SCHEMA_NOTES = ("title", "description", "$schema", "$id", "$comment",
                  "default", "examples")
 
@@ -143,6 +222,40 @@ def check_schema(schema, path: str = "schema") -> None:
             check_schema(sub, f"{path}.properties.{key}")
     if "items" in schema:
         check_schema(schema["items"], f"{path}.items")
+    if "additionalProperties" in schema:
+        extra = schema["additionalProperties"]
+        if not isinstance(extra, bool):
+            check_schema(extra, f"{path}.additionalProperties")
+    for key in _NUMBER_KEYS:
+        if key in schema:
+            v = schema[key]
+            if (isinstance(v, bool) or not isinstance(v, (int, float))
+                    or v != v or v in (float("inf"), float("-inf"))):
+                raise ValueError(f"{path}.{key}: must be a number, got "
+                                 f"{describe(v)}")
+    for key in _COUNT_KEYS:
+        if key in schema:
+            v = schema[key]
+            if isinstance(v, bool) or not isinstance(v, int) or v < 0:
+                raise ValueError(f"{path}.{key}: must be a whole number "
+                                 f"(0 or more), got {describe(v)}")
+    if "pattern" in schema:
+        text = schema["pattern"]
+        if not isinstance(text, str):
+            raise ValueError(f"{path}.pattern: must be a regex text, got "
+                             f"{describe(text)}")
+        check_regex(f"{path}.pattern", text)
+    if "uniqueItems" in schema and not isinstance(schema["uniqueItems"], bool):
+        raise ValueError(f"{path}.uniqueItems: must be true or false, got "
+                         f"{describe(schema['uniqueItems'])}")
+    for key in ("anyOf", "oneOf", "allOf"):
+        if key in schema:
+            subs = schema[key]
+            if not isinstance(subs, list) or not subs:
+                raise ValueError(f"{path}.{key}: must be a non-empty list "
+                                 f"of schemas, got {describe(subs)}")
+            for i, sub in enumerate(subs):
+                check_schema(sub, f"{path}.{key}[{i}]")
 
 
 def _same_json(a, b) -> bool:
@@ -158,6 +271,11 @@ def _same_json(a, b) -> bool:
     if isinstance(a, (dict, list)) or isinstance(b, (dict, list)):
         return False
     return a == b
+
+
+#: A schema check stops collecting problems at this many (the report shows
+#: three), so a big reply that is wrong everywhere is still fast.
+MAX_ERRORS = 20
 
 
 def _check_schema(data, schema: dict, path: str = "$") -> list[str]:
@@ -185,20 +303,115 @@ def _check_schema(data, schema: dict, path: str = "$") -> list[str]:
     if isinstance(data, list) and "items" in schema:
         for i, item in enumerate(data):
             errors.extend(_check_schema(item, schema["items"], f"{path}[{i}]"))
+            if len(errors) >= MAX_ERRORS:      # a huge array: three are shown
+                break
+    if "const" in schema and not _same_json(data, schema["const"]):
+        errors.append(f"{path}: {data!r} is not the required constant "
+                      f"{schema['const']!r}")
+    if isinstance(data, dict) and "additionalProperties" in schema:
+        extra = schema["additionalProperties"]
+        known = schema.get("properties", {})
+        for key in data:
+            if len(errors) >= MAX_ERRORS:
+                break
+            if key in known:
+                continue
+            if extra is False:
+                errors.append(f"{path}: unexpected key {key!r}")
+            elif extra is not True:
+                errors.extend(_check_schema(data[key], extra,
+                                            f"{path}.{key}"))
+    if _is_number(data):
+        for key, bad, word in (
+                ("minimum", lambda v, m: v < m, "below the minimum"),
+                ("maximum", lambda v, m: v > m, "above the maximum"),
+                ("exclusiveMinimum", lambda v, m: v <= m,
+                 "not above the exclusive minimum"),
+                ("exclusiveMaximum", lambda v, m: v >= m,
+                 "not below the exclusive maximum")):
+            if key in schema and bad(data, schema[key]):
+                errors.append(f"{path}: {data!r} is {word} {schema[key]!r}")
+    if isinstance(data, str):
+        if "minLength" in schema and len(data) < schema["minLength"]:
+            errors.append(f"{path}: {len(data)} characters, minLength "
+                          f"{schema['minLength']}")
+        if "maxLength" in schema and len(data) > schema["maxLength"]:
+            errors.append(f"{path}: {len(data)} characters, maxLength "
+                          f"{schema['maxLength']}")
+        if "pattern" in schema and not re.search(schema["pattern"], data):
+            errors.append(f"{path}: does not match pattern "
+                          f"/{schema['pattern']}/")
+    if isinstance(data, list):
+        if "minItems" in schema and len(data) < schema["minItems"]:
+            errors.append(f"{path}: {len(data)} items, minItems "
+                          f"{schema['minItems']}")
+        if "maxItems" in schema and len(data) > schema["maxItems"]:
+            errors.append(f"{path}: {len(data)} items, maxItems "
+                          f"{schema['maxItems']}")
+        if schema.get("uniqueItems"):
+            seen = set()
+            for item in data:
+                k = _canon(item)
+                if k in seen:
+                    errors.append(f"{path}: items are not unique")
+                    break
+                seen.add(k)
+    if "allOf" in schema:
+        for sub in schema["allOf"]:
+            errors.extend(_check_schema(data, sub, path))
+    if "anyOf" in schema and all(_check_schema(data, sub, path)
+                                 for sub in schema["anyOf"]):
+        errors.append(f"{path}: matches none of the anyOf schemas")
+    if "oneOf" in schema:
+        hits = sum(1 for sub in schema["oneOf"]
+                   if not _check_schema(data, sub, path))
+        if hits != 1:
+            errors.append(f"{path}: matches {hits} of the oneOf schemas, "
+                          f"needs exactly 1")
     return errors
 
 
-TEXT_KINDS = ("contains", "not_contains", "icontains", "equals", "regex",
-              "not_regex", "starts_with", "ends_with")
+def _canon(v):
+    """A hashable form of a JSON value that is equal exactly when
+    _same_json says so (true is not 1, 1 is 1.0, key order is free)."""
+    if isinstance(v, bool):
+        return ("b", v)
+    if isinstance(v, (int, float)):
+        return ("n", v)
+    if isinstance(v, str):
+        return ("s", v)
+    if v is None:
+        return ("z",)
+    if isinstance(v, list):
+        return ("l", tuple(_canon(x) for x in v))
+    return ("d", frozenset((k, _canon(x)) for k, x in v.items()))
+
+
+def _schema_verdict(data, schema) -> tuple[bool, str]:
+    try:
+        errors = _check_schema(data, schema)
+    except RecursionError:
+        return False, "schema check: the JSON is nested too deeply"
+    return (not errors,
+            "schema valid" if not errors else "; ".join(errors[:3]))
+
+
+def _is_number(v) -> bool:
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+TEXT_KINDS = ("contains", "not_contains", "icontains", "equals",
+              "not_equals", "regex", "not_regex", "starts_with", "ends_with")
 #: Take a list of texts: `contains_any: [refund, credit]`.
 LIST_KINDS = ("contains_any", "contains_all")
-COUNT_KINDS = ("max_tokens", "min_tokens")
+COUNT_KINDS = ("max_tokens", "min_tokens", "max_chars", "min_chars",
+               "max_words", "min_words", "max_lines")
 #: Every assertion name. `judge` is put to a model by the runner; evaluate()
 #: decides all the others itself.
 SECURITY_KINDS = ("no_pii", "no_secrets", "no_hidden_chars", "no_urls",
                   "no_prompt_leak")
-KINDS = (TEXT_KINDS + LIST_KINDS + ("json_valid", "schema") + COUNT_KINDS
-         + SECURITY_KINDS + ("judge",))
+KINDS = (TEXT_KINDS + LIST_KINDS + ("json_valid", "schema", "contains_json")
+         + COUNT_KINDS + SECURITY_KINDS + ("not", "judge"))
 #: no_prompt_leak: words in a run, and the bounds on a value given.
 LEAK_DEFAULT = 8
 LEAK_MIN, LEAK_MAX = 3, 200
@@ -330,12 +543,80 @@ def _security(kind: str, want):
     return n
 
 
-def _pattern(kind: str, want) -> re.Pattern:
-    text = _text(kind, want)
+try:                                    # Python 3.11 and later
+    from re import _constants as _sre_c
+    from re import _parser as _sre_parse
+except ImportError:                     # pragma: no cover - 3.10
+    import sre_constants as _sre_c
+    import sre_parse as _sre_parse
+
+
+def _items(body):
+    """The nodes of a repeat's body, one group level looked through."""
+    nodes = list(body)
+    while len(nodes) == 1 and nodes[0][0] == _sre_c.SUBPATTERN:
+        nodes = list(nodes[0][1][-1])
+    return nodes
+
+
+def _unbounded(node) -> bool:
+    return (node[0] in (_sre_c.MAX_REPEAT, _sre_c.MIN_REPEAT)
+            and node[1][1] == _sre_c.MAXREPEAT)
+
+
+def _nested_repeat(nodes) -> bool:
+    """True for a pattern that repeats, without limit, something that is
+    itself only (or optionally) repeated without limit: (a+)+  (a*)*
+    (\\w+\\s?)*  (a+b?)+ . On a reply that almost matches, these take time
+    that doubles with every extra character."""
+    for node in nodes:
+        op, arg = node
+        if op in (_sre_c.MAX_REPEAT, _sre_c.MIN_REPEAT):
+            body = _items(arg[2])
+            if (_unbounded(node) and any(_unbounded(n) for n in body)
+                    and all(n[0] in (_sre_c.MAX_REPEAT, _sre_c.MIN_REPEAT)
+                            for n in body)):
+                # more than one mandatory piece (a+b+)+ splits only one way
+                must = [n for n in body if n[1][0] >= 1]
+                if len(must) <= 1 and all(_unbounded(n) for n in must):
+                    return True
+            if _nested_repeat(body):
+                return True
+        elif op == _sre_c.SUBPATTERN:
+            if _nested_repeat(arg[-1]):
+                return True
+        elif op == _sre_c.BRANCH:
+            if any(_nested_repeat(alt) for alt in arg[1]):
+                return True
+        elif op in (_sre_c.ASSERT, _sre_c.ASSERT_NOT):
+            if _nested_repeat(arg[1]):
+                return True
+    return False
+
+
+def check_regex(kind: str, text: str) -> re.Pattern:
+    """Compile `text`, or ValueError: it does not compile, or it is the
+    nested-repeat shape that can hang a run (Python's regex engine cannot
+    be interrupted, and a reply is not under the author's control)."""
     try:
-        return re.compile(text)
+        compiled = re.compile(text)
     except (re.error, RecursionError, OverflowError) as e:
-        raise ValueError(f"{kind}: invalid regex /{text}/: {e}")
+        raise ValueError(f"{kind}: invalid regex /{text}/: {e}") from None
+    try:
+        risky = _nested_repeat(_sre_parse.parse(text))
+    except Exception:                    # an analysis that fails allows
+        risky = False
+    if risky:
+        raise ValueError(
+            f"{kind}: /{text}/ repeats a repeat without limit (like (a+)+ "
+            f"or (\\w+\\s?)*): on a reply that almost matches it can run "
+            f"for hours and cannot be interrupted, so it is refused - write "
+            f"it without the inner repeat (a+ instead of (a+)+)")
+    return compiled
+
+
+def _pattern(kind: str, want) -> re.Pattern:
+    return check_regex(kind, _text(kind, want))
 
 
 def _rubric(value, where: str) -> str:
@@ -363,6 +644,25 @@ def _judge(want):
         raise ValueError(f"judge: unknown key {extra[0]!r} - a judge takes "
                          f"only 'rubric'")
     return {"rubric": _rubric(want["rubric"], "judge.rubric")}
+
+
+def _schema_operand(kind: str, want):
+    """A schema may be written as YAML, or pasted as JSON text (a block
+    scalar: `schema: |` and the JSON under it), because the cases file reader
+    has no flow maps and a schema is usually JSON already."""
+    if isinstance(want, str):
+        try:
+            parsed = parse_json(want)
+        except (ValueError, RecursionError) as e:
+            raise ValueError(
+                f"{kind}: must be a mapping, got {describe(want)} - write "
+                f"the schema as YAML, one key per line, or as JSON text "
+                f"({e})") from None
+        if not isinstance(parsed, dict):
+            raise ValueError(f"{kind}: must be a mapping; the JSON text is "
+                             f"{describe(parsed)}, not an object")
+        return parsed
+    return want
 
 
 def check(assertion) -> dict:
@@ -398,8 +698,30 @@ def check(assertion) -> dict:
     if kind == "json_valid":
         return {kind: _flag(kind, want)}
     if kind == "schema":
+        want = _schema_operand(kind, want)
         check_schema(want)
         return {kind: want}
+    if kind == "contains_json":
+        if want is True:
+            return {kind: True}
+        want = _schema_operand(kind, want) if isinstance(want, str) else want
+        if isinstance(want, dict):
+            check_schema(want)
+            return {kind: want}
+        raise ValueError("contains_json: takes true (a JSON object or array "
+                         "somewhere in the reply) or a schema it must "
+                         "satisfy, got " + describe(want))
+    if kind == "not":
+        if isinstance(want, dict) and len(want) == 1 and (
+                next(iter(want)) in ("not", "judge")):
+            raise ValueError(f"not: cannot wrap {next(iter(want))!r} "
+                             + ("(a judge is a model's opinion)"
+                                if next(iter(want)) == "judge" else
+                                "(not-not is just the assertion)"))
+        try:
+            return {kind: check(want)}
+        except ValueError as e:
+            raise ValueError(f"not: {e}") from None
     if kind in SECURITY_KINDS:
         return {kind: _security(kind, want)}
     return {kind: _judge(want)}
@@ -449,6 +771,10 @@ def evaluate(assertion: dict, output: str,
     if kind in SECURITY_KINDS:
         return _evaluate_security(kind, want, output, template)
 
+    if kind == "not":
+        ok, detail = evaluate(want, output, template)
+        return (not ok, f"not: {detail}" if not ok
+                else f"unexpectedly holds: {detail}")
     if kind == "contains":
         ok = want in output
         return ok, f"contains {want!r}" if ok else f"missing {want!r}"
@@ -463,6 +789,10 @@ def evaluate(assertion: dict, output: str,
         ok = output.strip() == want.strip()
         return ok, ("equals the expected text" if ok
                     else f"expected exactly {want!r}")
+    if kind == "not_equals":
+        ok = output.strip() != want.strip()
+        return ok, ("differs from the text" if ok
+                    else f"unexpectedly equals {want!r}")
     if kind == "contains_any":
         found = [t for t in want if t in output]
         return (bool(found), f"contains {found[0]!r}" if found
@@ -492,7 +822,7 @@ def evaluate(assertion: dict, output: str,
     if kind == "json_valid":
         wanted = _flag(kind, want)
         try:
-            json.loads(output)
+            parse_json(output)
             problem = None
         except (ValueError, RecursionError) as e:   # nested too deep: no JSON
             problem = str(e)
@@ -505,12 +835,26 @@ def evaluate(assertion: dict, output: str,
     if kind == "schema":
         check_schema(want)
         try:
-            data = json.loads(output)
+            data = parse_json(output)
         except (ValueError, RecursionError) as e:
             return False, f"schema check needs JSON, got: {e}"
-        errors = _check_schema(data, want)
-        return (not errors,
-                "schema valid" if not errors else "; ".join(errors[:3]))
+        return _schema_verdict(data, want)
+    if kind == "contains_json":
+        found, data = find_json(output)
+        if not found:
+            return False, ("no JSON object or array found (a ```json fence "
+                           "or a bare one)")
+        if want is True:
+            return True, "contains JSON"
+        return _schema_verdict(data, want)
+    if kind in ("max_chars", "min_chars", "max_words", "min_words",
+                "max_lines"):
+        text = output.strip()
+        n, unit = ((len(text), "characters") if kind.endswith("chars") else
+                   (len(text.split()), "words") if kind.endswith("words")
+                   else (len(text.splitlines()), "lines"))
+        ok = n <= want if kind.startswith("max") else n >= want
+        return ok, f"{n} {unit} ({kind.split('_')[0]} {want})"
     if kind == "max_tokens":
         n = estimate_tokens(output)
         return n <= want, f"~{n} tokens (max {want})"

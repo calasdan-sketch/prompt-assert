@@ -51,8 +51,21 @@ def list_prompts(root: str, prompts_dir: str = PROMPTS_DIR
             for k, v in sorted(found.items())}
 
 
+def check_name(value: str, what: str = "name") -> str:
+    """A prompt name or version as a file-name part: never a path. Names
+    come from --prompt / --version and are joined onto prompts/, so `../x`
+    would read a file outside the folder."""
+    if (not isinstance(value, str) or not value or value in (".", "..")
+            or any(c in value for c in "/\\\0")):
+        raise ValueError(f"{what} {value!r} must be a plain name, not a path "
+                         f"(no / or \\)")
+    return value
+
+
 def prompt_path(root: str, name: str, version: str,
                 prompts_dir: str = PROMPTS_DIR) -> str:
+    check_name(name, "prompt")
+    check_name(version, "version")
     return os.path.join(root, prompts_dir, f"{name}.{version}.txt")
 
 
@@ -61,15 +74,110 @@ def load_prompt(root: str, name: str, version: str,
     path = prompt_path(root, name, version, prompts_dir)
     if not os.path.isfile(path):
         raise FileNotFoundError(f"no such prompt: {name}.{version} ({path})")
-    with open(path, encoding="utf-8") as f:
-        return f.read()
+    # utf-8-sig: a byte-order mark (Notepad's "UTF-8") is not prompt text
+    with open(path, encoding="utf-8-sig") as f:
+        text = f.read()
+    try:
+        parse_chat(text)
+    except ValueError as e:
+        raise ValueError(f"{path}: {e}") from None
+    return text
+
+
+ROLES = ("system", "user", "assistant")
+_ROLE_LINE = re.compile(r"^\[\[\s*([A-Za-z]+)\s*\]\][ \t]*$")
+
+
+def parse_chat(template: str):
+    """None for a plain prompt. A prompt whose first non-blank line is a role
+    marker - `[[system]]`, `[[user]]` or `[[assistant]]` alone on its line -
+    is a conversation: [(role, text)], cut at the marker lines. Only a file
+    that STARTS with a marker is read this way, so a plain prompt that
+    mentions one is untouched; and the cut is made on the template, before
+    any case input is put in, so an input containing `[[system]]` stays
+    text. ValueError for a conversation that cannot be sent (unknown role,
+    empty turn, `system` not first, not ending with a user turn)."""
+    lines = template.split("\n")
+    first = next((ln for ln in lines if ln.strip()), "")
+    if not _ROLE_LINE.match(first):
+        return None
+    turns: list[list] = []
+    for number, line in enumerate(lines, 1):
+        m = _ROLE_LINE.match(line)
+        if m:
+            role = m.group(1)
+            if role not in ROLES:
+                raise ValueError(
+                    f"line {number}: unknown role [[{role}]] - the roles "
+                    f"are {', '.join('[[' + r + ']]' for r in ROLES)}, "
+                    f"lower case")
+            turns.append([role, []])
+        else:
+            turns[-1][1].append(line)
+    out = []
+    for i, (role, body) in enumerate(turns):
+        text = "\n".join(body).strip("\n")
+        if not text.strip():
+            raise ValueError(f"the [[{role}]] turn (number {i + 1}) is empty")
+        if role == "system" and i:
+            raise ValueError("[[system]] may only be the first turn")
+        out.append((role, text))
+    if out[-1][0] != "user":
+        raise ValueError("a conversation must end with a [[user]] turn (the "
+                         "one the model answers)")
+    return out
+
+
+def template_text(template: str) -> str:
+    """The words of a prompt without its role markers (what no_prompt_leak
+    compares a reply with)."""
+    turns = parse_chat(template)
+    return template if turns is None else "\n\n".join(t for _, t in turns)
+
+
+class ChatPrompt(str):
+    """A rendered conversation. As text it is the JSON of the messages (so
+    every key, hash and size estimate over the rendered prompt is exact and
+    cannot be confused with a plain prompt); `.messages` is what is sent."""
+
+    messages: list
+
+    def __new__(cls, messages: list):
+        import json
+        self = super().__new__(cls, json.dumps(messages, ensure_ascii=False,
+                                               sort_keys=True))
+        self.messages = messages
+        return self
+
+    @property
+    def plain(self) -> str:
+        return "\n".join(m["content"] for m in self.messages)
+
+
+def plain_text(rendered: str) -> str:
+    """The text of a rendered prompt without JSON framing (for estimates)."""
+    return rendered.plain if isinstance(rendered, ChatPrompt) else rendered
+
+
+def _fill(text: str, values: dict) -> str:
+    """Replace {{name}} for every name in `values`, in ONE pass: text that a
+    value brings in (a case input saying {{tone}}) is never filled again."""
+    if not values:
+        return text
+    names = "|".join(re.escape(k) for k in sorted(values, key=len,
+                                                  reverse=True))
+    return re.sub(r"\{\{(" + names + r")\}\}",
+                  lambda m: values[m.group(1)], text)
 
 
 def render(template: str, input_text: str, vars: dict | None = None) -> str:
-    out = template.replace("{{input}}", input_text)
-    for key, val in (vars or {}).items():
-        out = out.replace("{{" + key + "}}", str(val))
-    return out
+    values = {str(k): str(v) for k, v in (vars or {}).items()}
+    values["input"] = input_text
+    turns = parse_chat(template)
+    if turns is None:
+        return _fill(template, values)
+    return ChatPrompt([{"role": r, "content": _fill(t, values)}
+                       for r, t in turns])
 
 
 #: Looks like a placeholder: {{input}}, {{ tone }}, {{Input}}. Double braces
@@ -220,6 +328,7 @@ def load_cases(root: str, name: str,
     cannot be used as a suite - malformed YAML, no cases, a case or an
     assertion that is not one - with one line per problem, each naming the
     file, the case and the key."""
+    check_name(name, "prompt")
     path = os.path.join(root, prompts_dir, f"{name}.cases.yaml")
     if not os.path.isfile(path):
         raise FileNotFoundError(f"no cases file: {path}")

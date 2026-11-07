@@ -303,6 +303,12 @@ def _suite_dict(name: str, version: str,
     }
 
 
+def _brief(assertion, limit: int = 100) -> str:
+    """An assertion for one line of the report: a long schema is cut."""
+    text = str(assertion)
+    return text if len(text) <= limit else text[:limit - 3] + "..."
+
+
 def _print_run(name: str, version: str,
                results: list[runner_mod.CaseResult]) -> int:
     """Human report for one prompt version: pytest-style dots, then the
@@ -320,7 +326,7 @@ def _print_run(name: str, version: str,
             continue
         for a in r.assertions:
             if not a.passed:
-                print(f"    ✗ {a.assertion} -> {a.detail}")
+                print(f"    ✗ {_brief(a.assertion)} -> {a.detail}")
         print(f"    output: {r.output[:300]!r}")
     flaky = [r for r in results if r.passed and r.flaky]
     if flaky:
@@ -475,14 +481,32 @@ def _finish_tapes(args, tapes, full_run: bool) -> int:
                 print(f"warning: {tape.path}: a recorded reply looks like it "
                       f"contains {', '.join(leaks)}; read the file before "
                       "you commit it", file=sys.stderr)
+            personal = sorted({k for key, e in tape.responses.items()
+                               if key in tape.used
+                               for k in scan_mod.find_pii(
+                                   e["output"], scan_mod.PII_DEFAULT)})
+            if personal:
+                print(f"warning: {tape.path}: a recorded reply looks like it "
+                      f"contains personal data ({', '.join(personal)}); "
+                      "a cassette is committed - read the file before you "
+                      "commit it", file=sys.stderr)
             try:
                 tape.save(prune=full_run)
             except OSError as e:
                 print(f"error: cannot write the cassette: "
                       f"{runner_mod.error_text(e)}", file=sys.stderr)
                 return 2
-            print(f"recorded {sum(1 for k in tape.responses if k in tape.used)}"
-                  f" answer(s) to {tape.path}", file=sys.stderr)
+            made = sum(1 for k in tape.responses if k in tape.used)
+            drift = ""
+            if tape.new + tape.changed + tape.same:
+                drift = (f" ({tape.new} new, {tape.changed} changed, "
+                         f"{tape.same} unchanged since the last recording)")
+            print(f"recorded {made} answer(s) to {tape.path}{drift}",
+                  file=sys.stderr)
+            if tape.changed:
+                print(f"note: {tape.changed} answer(s) differ from the "
+                      "last recording - the model said something new; "
+                      "`git diff` shows which", file=sys.stderr)
         elif full_run and tape.stale():
             print(f"note: {tape.path} holds {tape.stale()} recording(s) "
                   "nothing used; `run --all --record` drops them",

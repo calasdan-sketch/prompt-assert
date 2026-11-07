@@ -31,7 +31,8 @@ class ChangedError(RuntimeError):
 def _git(root: str, *args: str) -> str:
     try:
         done = subprocess.run(["git", "-C", root, *args], capture_output=True,
-                              text=True, timeout=60, check=False)
+                              text=True, encoding="utf-8",
+                              errors="replace", timeout=60, check=False)
     except FileNotFoundError:
         raise ChangedError("--changed-since needs git, which was not found")
     except subprocess.TimeoutExpired:

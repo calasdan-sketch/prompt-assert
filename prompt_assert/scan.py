@@ -159,12 +159,29 @@ _WWW = re.compile(r"(?i)(?<![\w/@.])www\.[a-z0-9-]+(?:\.[a-z0-9-]+)+"
                   r"(?:/[^\s<>\"')\]]*)?")
 
 
+#: A protocol-relative link (`//evil.example/x.png`) loads over whatever the
+#: page uses, so it exfiltrates like https:// does. Only where a link can
+#: start: after ( [ " ' = < or white space, never inside `https://host//x`.
+_REL = re.compile(r"(?i)(?:(?<=^)|(?<=[\s(\[\"'=<]))//(?=[a-z0-9-]+(?:\.[a-z0-9-]+)+"
+                  r"(?:[/:?#\s)\]\"'>]|$))[^\s<>\"')\]]+", re.MULTILINE)
+#: Schemes that carry data or run code instead of naming a host.
+_ACTIVE = re.compile(r"(?i)(?<![\w])(?:(?:javascript|vbscript):(?=[^\s])"
+                     r"|data:(?=[a-z0-9.+-]+/[a-z0-9.+-]+|[;,]))")
+
+
 def find_urls(text: str) -> list[str]:
-    """Host names of every link in `text` (in order, repeats kept)."""
+    """Host names of every link in `text` (in order, repeats kept). A
+    javascript:, vbscript: or data: URI has no host and is listed as
+    "javascript:" etc., so no domain allow-list can let it through."""
     hosts = []
-    for m in list(_URL.finditer(text)) + list(_WWW.finditer(text)):
+    for m in _ACTIVE.finditer(text):
+        hosts.append((m.start(), m.group().lower()))
+    for m in (list(_URL.finditer(text)) + list(_WWW.finditer(text))
+              + list(_REL.finditer(text))):
         raw = m.group()
-        if not re.match(r"(?i)[a-z]+://", raw):
+        if raw.startswith("//"):
+            raw = "http:" + raw
+        elif not re.match(r"(?i)[a-z]+://", raw):
             raw = "http://" + raw
         try:
             host = urlsplit(raw).hostname

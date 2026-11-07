@@ -75,6 +75,9 @@ class Tape:
         self.judges: dict[str, dict] = {}
         self.used: set[str] = set()
         self.warnings: list[str] = []
+        #: Recording only: how this run's answers compare with the ones the
+        #: file already held (the model drifting shows up here).
+        self.new = self.changed = self.same = 0
         self._lock = threading.Lock()
         self._load()
 
@@ -140,6 +143,14 @@ class Tape:
             model: str = "") -> None:
         key = response_key(rendered, sample)
         with self._lock:
+            if key in self.used:
+                pass                     # same call twice in one run
+            elif key not in self.responses:
+                self.new += 1
+            elif self.responses[key].get("output") == output:
+                self.same += 1
+            else:
+                self.changed += 1
             self.responses[key] = {"output": output, "model": model}
             self.used.add(key)
 

@@ -485,7 +485,9 @@ def _complete(prompt: str, cfg: dict, temperature: float, gate: _Gate) -> str:
     timeout = cfg["timeout"]
     body = json.dumps({
         "model": cfg["model"],
-        "messages": [{"role": "user", "content": prompt}],
+        # a rendered conversation (suite.ChatPrompt) carries its messages
+        "messages": (list(prompt.messages) if hasattr(prompt, "messages")
+                     else [{"role": "user", "content": prompt}]),
         "temperature": temperature,
     }).encode()
     req = urllib.request.Request(

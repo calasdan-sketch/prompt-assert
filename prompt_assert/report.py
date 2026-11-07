@@ -6,6 +6,7 @@ the report or an annotation command."""
 from __future__ import annotations
 
 import os
+import re
 import tempfile
 
 from .textsafe import clean
@@ -30,8 +31,23 @@ def _code(text: str) -> str:
     return f"{fence}\n{text}\n{fence}"
 
 
+def _html(text: str) -> str:
+    """Text for inside an HTML element (the <summary> line): GitHub renders
+    <img> and <a> a model or a case name wrote, so nothing is left as markup."""
+    out = (clean(text).replace("&", "&amp;").replace("<", "&lt;")
+           .replace(">", "&gt;").replace("\n", " "))
+    return out.replace("://", ":&#47;&#47;")
+
+
 def _cell(text: str) -> str:
-    return clean(text).replace("|", "\\|").replace("\n", " ")
+    """Text for a Markdown table cell or list item: no markup, no link (a
+    reply could carry `[click](https://evil.example)` or an image that loads
+    a tracking URL), no autolink, no row break."""
+    out = _html(text)
+    for ch in "\\`*_[]()|!~":
+        out = out.replace(ch, "\\" + ch)
+    out = re.sub(r"(?i)www\.", "www&#46;", out)
+    return out.replace("@", "&#64;")
 
 
 def markdown(suites, title: str = "prompt-assert") -> str:
@@ -52,8 +68,8 @@ def markdown(suites, title: str = "prompt-assert") -> str:
         for r in results:
             label = _cell(f"{name}.{version} / {r.name}")
             if not r.passed:
-                lines += ["", "<details><summary>FAIL " + label
-                          + "</summary>", ""]
+                lines += ["", "<details><summary>FAIL " + _html(
+                    f"{name}.{version} / {r.name}") + "</summary>", ""]
                 if r.error:
                     lines.append(_code("error: " + r.error))
                 for a in r.assertions:

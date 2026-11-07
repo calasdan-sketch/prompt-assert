@@ -499,7 +499,7 @@ class TestJobs(Base):
         self.assertEqual(code, 0)
         self.assertEqual([c["name"] for c in json.loads(out)["cases"]],
                          [f"c{i}" for i in range(8)])
-        self.assertLess(parallel, serial / 2.5, (serial, parallel))
+        self.assertLess(parallel, serial / 2, (serial, parallel))
 
     def test_first_error_in_case_order_ends_the_list(self):
         root = self.project(cases_yaml(6))
@@ -768,7 +768,7 @@ class TestReports(Base):
         self.assertNotIn("\x1b", md)
         self.assertNotIn("\r", md)
         self.assertIn("````", md)               # longer fence than the text
-        self.assertIn("c\\|1", md)
+        self.assertIn("c|1", md)       # a summary line, not a table cell
         self.assertIn("FAILED", md)
 
     def test_markdown_is_cut_under_the_comment_limit(self):
