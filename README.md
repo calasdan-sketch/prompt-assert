@@ -50,12 +50,13 @@ Zero dependencies — Python 3.10+ stdlib only.
 pip install prompt-assert
 ```
 
-That is the last release on PyPI (0.2.0). This branch is 0.4.0 (unreleased:
-cassettes, security assertions, `plan` and budgets, `--jobs`, `--tag`,
-`--changed-since`, Markdown and GitHub reports, system/user/assistant prompts,
-a fuller `schema` and `contains_json`, on top of 0.3.0's `--repeat`,
-`--junit` and `diff --fail-on-regression`); until it is released, install it
-from the repository:
+```bash
+prompt-assert --version     # this page describes 0.4.0 and later
+```
+
+If that prints 0.2.0, or `pip` finds nothing newer, 0.4.0 has not been
+released to PyPI yet (PyPI listed only 0.2.0 on 2026-11-07, the last time
+this was checked). Install the repository instead; it is the same code:
 
 ```bash
 pip install git+https://github.com/calasdan-sketch/prompt-assert
@@ -78,7 +79,7 @@ prompt-assert init                                       # scaffold prompts/ wit
 prompt-assert --demo run --prompt sentiment --version v1 # zero-setup trial, no model needed
 prompt-assert --demo diff v1 v2 --prompt sentiment       # A/B on the same golden cases
 prompt-assert run --all                                  # every prompt x every version (CI)
-prompt-assert list
+prompt-assert list                                       # add --format json for scripts
 prompt-assert plan --all                                 # calls it would make, no model contact
 prompt-assert corpus injection > prompts/mybot.cases.yaml  # 25 injection/leak cases
 ```
@@ -351,6 +352,10 @@ Zero dependencies — plain stdlib HTTP against any OpenAI-compatible API:
 | `PROMPT_ASSERT_MODEL` | `llama3.1` | |
 | `PROMPT_ASSERT_TIMEOUT` | `60` | seconds for one request, from connecting to the last byte of the reply: a deadline, however slowly the server sends |
 | `PROMPT_ASSERT_MAX_REPLY_BYTES` | `8388608` | the largest reply body accepted (8 MiB); a bigger one is an error and is never read into memory |
+
+The address must be `http://` or `https://` with a host and no user name or
+password in it (`file://` and `ftp://` are refused with exit 2, `user:pass@host`
+too: put the key in `PROMPT_ASSERT_API_KEY`).
 
 Flags `--model`, `--base-url`, `--api-key`, `--timeout`, `--max-reply-bytes`
 (and `--demo`) override env; they are accepted before or after the subcommand
@@ -752,6 +757,13 @@ What this tool does not do, so you do not find out the hard way:
   different text here.
 - `diff` shows flipped verdicts but exits 0 (see Exit codes); `run` is what
   fails a build.
+- Windows: CI runs the tests on `windows-latest`, but the Windows-specific
+  rules added in round 4 (device names such as `nul`, a retry when a report
+  file is briefly locked) were written from a static review and tested with
+  the operating system faked, not on Windows. Python 3.10, the oldest
+  version allowed, is checked by CI only; 3.11, 3.12 and 3.13 were run here.
+- `--format json` prints nothing on stdout when a command fails with exit 2
+  (the reason is on stderr); read the exit code first.
 
 ## How it compares
 
@@ -830,7 +842,8 @@ not a rate.
 
 ## Tests
 
-`python3 -m unittest discover -s tests`. A few tests skip, and say why: the
+`python3 -m unittest discover -s tests -t .` (from the repository root; plain
+`-s tests` cannot import two test modules). `python3 -m pytest` also works. A few tests skip, and say why: the
 check of `pyproject.toml` needs `tomllib` (Python 3.11 and later), and the
 ones that depend on file permissions skip on Windows and when you run as
 root. The tests are free: they run against fake model servers on 127.0.0.1

@@ -23,8 +23,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install prompt-assert (stdlib only, no other dependencies)
-        run: pip install git+https://github.com/calasdan-sketch/prompt-assert
+      # prompt-assert has no dependencies. Pin a version you have looked at,
+      # so a later release cannot change your CI without a commit from you.
+      - name: Install prompt-assert
+        run: pip install "prompt-assert==0.4.0"
       - name: Prompt regression tests (demo mode, fake model)
         run: prompt-assert --demo run --prompt sentiment --version v1
       # Free, deterministic CI on your own prompts: record once on your

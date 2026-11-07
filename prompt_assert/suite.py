@@ -51,6 +51,12 @@ def list_prompts(root: str, prompts_dir: str = PROMPTS_DIR
             for k, v in sorted(found.items())}
 
 
+IS_WINDOWS = os.name == "nt"
+_WIN_DEVICES = frozenset(
+    ["con", "prn", "aux", "nul"]
+    + [f"{d}{n}" for d in ("com", "lpt") for n in "123456789"])
+
+
 def check_name(value: str, what: str = "name") -> str:
     """A prompt name or version as a file-name part: never a path. Names
     come from --prompt / --version and are joined onto prompts/, so `../x`
@@ -59,6 +65,17 @@ def check_name(value: str, what: str = "name") -> str:
             or any(c in value for c in "/\\\0")):
         raise ValueError(f"{what} {value!r} must be a plain name, not a path "
                          f"(no / or \\)")
+    if IS_WINDOWS:
+        # Windows would open a device (`nul.v1.txt` is NUL), a hidden
+        # stream (`a:b`), or a different file (a trailing dot or space is
+        # dropped) instead of the file the name says
+        if (any(c in value for c in '<>:"|?*') or value[-1] in ". "
+                or any(ord(c) < 32 for c in value)
+                or value.split(".")[0].rstrip(" ").lower() in _WIN_DEVICES):
+            raise ValueError(
+                f"{what} {value!r} is not a usable file name on Windows "
+                "(no < > : \" | ? *, no name ending in a dot or space, and "
+                "not CON, PRN, AUX, NUL, COM1-9 or LPT1-9)")
     return value
 
 
@@ -75,8 +92,12 @@ def load_prompt(root: str, name: str, version: str,
     if not os.path.isfile(path):
         raise FileNotFoundError(f"no such prompt: {name}.{version} ({path})")
     # utf-8-sig: a byte-order mark (Notepad's "UTF-8") is not prompt text
-    with open(path, encoding="utf-8-sig") as f:
-        text = f.read()
+    try:
+        with open(path, encoding="utf-8-sig") as f:
+            text = f.read()
+    except UnicodeDecodeError as e:
+        raise ValueError(f"{path}: not UTF-8 text ({e.reason} at byte "
+                         f"{e.start}) - save the file as UTF-8") from None
     try:
         parse_chat(text)
     except ValueError as e:

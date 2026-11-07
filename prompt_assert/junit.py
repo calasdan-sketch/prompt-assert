@@ -23,6 +23,7 @@ import os
 import tempfile
 import xml.etree.ElementTree as ET
 
+from . import fsutil
 from .textsafe import clean_xml
 
 #: How much of a case's output goes into its <failure> text.
@@ -110,7 +111,7 @@ def write(path: str, suites) -> None:
         # mkstemp makes the file private (0600); a report is no secret and
         # CI steps running as another user must read it: the usual mode
         os.chmod(tmp, 0o666 & ~_umask())
-        os.replace(tmp, path)
+        fsutil.replace(tmp, path)
     except BaseException:
         try:
             os.unlink(tmp)

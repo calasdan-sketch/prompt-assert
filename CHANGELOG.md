@@ -2,6 +2,53 @@
 
 ## 0.4.0 (unreleased)
 
+### Expert round 4 (what a stranger gets from `pip install`; on top of rounds 3 and 2, below)
+Tests 471 -> 495. Review notes with the command behind each finding: `docs/ROUND4.md`. No
+version bump: 0.4.0 is still unreleased (PyPI has 0.2.0), so this is one
+release.
+- `prompt_assert.__version__` exists and is the single place the version is
+  written (`--version` reads it); a test keeps it equal to `pyproject.toml`
+  and to this file's heading.
+- Package metadata names the author (Calas Automations Inc., the licence
+  holder). The source distribution now carries `benchmarks/` so its own
+  test run is complete (before, the benchmark test skipped there).
+- A model address must be `http://` or `https://` with a host. `file://`
+  and `ftp://` used to be handed to urllib, which opened them; they are now
+  exit 2 with a plain message. An address with `user:pass@` is refused (the
+  password would have been printed in "model unreachable" lines), as are
+  addresses with spaces, control or invisible characters. Checked before the
+  first request, so `--replay` is unaffected.
+- A prompt file that is not UTF-8 is exit 2 naming the file ("not UTF-8
+  text ... save the file as UTF-8"); it used to print Python's codec text
+  without a file name.
+- Typing `prompt-assert` with no command prints three lines on what to try
+  first (exit 2) instead of argparse's "arguments are required: cmd".
+- `list --format json` (scripts could not read `list`).
+- Windows (static review plus tests with the operating system faked; not
+  run on Windows): prompt and version names that Windows would misread
+  (`nul`, `con`, `a:b`, a trailing dot or space) are refused there with a
+  clear message; the cassette, JUnit and Markdown writers retry a few times
+  when Windows briefly refuses to replace a file another program has open;
+  `init` writes LF line endings on every system.
+- CI: a `package` job builds the wheel and sdist, runs `twine check`,
+  installs the wheel into a clean environment from a folder with a space in
+  its name, runs the quick start, and runs the sdist's own tests. The example
+  workflow pins `prompt-assert==0.4.0` instead of installing the repository's
+  newest commit (it works once 0.4.0 is on PyPI).
+- Fix: the command CI and the README gave for the tests, `python -m unittest
+  discover -s tests`, could not import `test_expert2` and `test_expert3`
+  (relative imports), so it reported 396 tests and two import errors and
+  CI's test step could not have passed. It is now `... -s tests -t .`
+  (`pytest` was always fine); a test keeps the three places right.
+- README: install section no longer promises what the registry lacks.
+- Changed behaviour: (1) `file://`, `ftp://`, `user:pass@host` and
+  whitespace-inside addresses are now refused; (2) on Windows only, the
+  names above are refused; (3) no command is exit 2 as before but the
+  message differs.
+- Not done: `py.typed` (mypy reports 29 errors; shipping the marker would
+  claim typing that is not there), a JSON error object on stdout for exit 2,
+  SARIF, a GitHub Action wrapper, pinning CI actions by commit hash.
+
 ### Expert round 3 (on top of round 2, below)
 Tests 425 -> 471; two earlier tests edited and one timing bound loosened (see
 "Changed behaviour").

@@ -6,3 +6,5 @@ include .github/workflows/ci.yml
 include examples/prompt-assert-example.yml
 include CHANGELOG.md
 recursive-include tests *.py
+# the offline benchmark travels with the source (its test skips without it)
+recursive-include benchmarks *.py *.md *.json

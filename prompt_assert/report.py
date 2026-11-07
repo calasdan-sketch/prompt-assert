@@ -9,6 +9,7 @@ import os
 import re
 import tempfile
 
+from . import fsutil
 from .textsafe import clean
 
 #: GitHub refuses a comment over 65536 characters; stay well under.
@@ -129,7 +130,7 @@ def write_atomic(path: str, text: str) -> None:
         mask = os.umask(0o022)
         os.umask(mask)
         os.chmod(tmp, 0o666 & ~mask)
-        os.replace(tmp, path)
+        fsutil.replace(tmp, path)
     except BaseException:
         try:
             os.unlink(tmp)

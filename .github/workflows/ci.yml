@@ -29,6 +29,37 @@ jobs:
       - name: Install
         run: pip install .
       - name: Test
-        run: python -m unittest discover -s tests
+        run: python -m unittest discover -s tests -t .
       - name: Smoke-test the console script
         run: prompt-assert --demo run --prompt sentiment --version v1
+
+  package:
+    # What a stranger gets from `pip install`: build the files that would go
+    # to PyPI, check them, install the wheel (not the checkout) into a clean
+    # environment, and run the commands from the README against it. Nothing
+    # is uploaded.
+    name: build and install the wheel
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build and check
+        run: |
+          pip install build twine
+          python -m build --outdir "$RUNNER_TEMP/dist" .
+          twine check "$RUNNER_TEMP/dist"/*
+      - name: Install the wheel into a clean environment and try it
+        run: |
+          python -m venv "$RUNNER_TEMP/clean"
+          "$RUNNER_TEMP/clean/bin/pip" install "$RUNNER_TEMP"/dist/*.whl
+          mkdir "$RUNNER_TEMP/work space" && cd "$RUNNER_TEMP/work space"
+          "$RUNNER_TEMP/clean/bin/prompt-assert" --version
+          "$RUNNER_TEMP/clean/bin/prompt-assert" init
+          "$RUNNER_TEMP/clean/bin/prompt-assert" --demo run --prompt sentiment --version v1
+      - name: The source distribution runs its own tests
+        run: |
+          mkdir "$RUNNER_TEMP/sdist" && tar -xzf "$RUNNER_TEMP"/dist/*.tar.gz -C "$RUNNER_TEMP/sdist"
+          cd "$RUNNER_TEMP"/sdist/prompt_assert-*/
+          python -m unittest discover -s tests -t .

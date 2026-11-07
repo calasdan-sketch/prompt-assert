@@ -32,6 +32,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from . import textsafe
+
 DEFAULT_TIMEOUT = 60.0
 MAX_TIMEOUT = 24 * 60 * 60.0       # a day; more than that is a typo
 DEFAULT_MAX_REPLY_BYTES = 8 * 1024 * 1024
@@ -188,9 +190,42 @@ def endpoint(base_url=None, model=None) -> tuple[str, str]:
              or "http://localhost:11434/v1").rstrip("/"))
 
 
+def check_base_url(base_url: str) -> str:
+    """The endpoint must be http:// or https:// with a host. urllib would
+    also open file:// and ftp:// addresses (and read a local file as the
+    "model"), so anything else is refused, in plain words."""
+    try:
+        parts = urllib.parse.urlsplit(base_url)
+        host = parts.hostname
+        scheme = parts.scheme.lower()
+    except ValueError:                 # `http://[::1/v1`
+        host = scheme = None
+    shown = textsafe.clean(base_url)
+    if len(shown) > 80:
+        shown = shown[:77] + "..."
+    if scheme not in ("http", "https") or not host:
+        raise ModelError(
+            f"the model address {shown!r} must look like "
+            "http://host:port/v1 or https://host/v1 (set "
+            "PROMPT_ASSERT_BASE_URL / --base-url)")
+    if "@" in parts.netloc:
+        # urllib does not use it as a login, and error messages and CI logs
+        # would print the password
+        raise ModelError(
+            "the model address must not contain a user name or password "
+            "(user:pass@host): put the key in PROMPT_ASSERT_API_KEY")
+    inner = base_url.strip()           # urllib drops surrounding blanks itself
+    if textsafe.clean(inner) != inner or re.search(r"\s", inner):
+        raise ModelError(
+            f"the model address {shown!r} contains a space, control or "
+            "invisible character")
+    return base_url
+
+
 def _cfg(base_url=None, api_key=None, model=None, timeout=None,
          max_reply_bytes=None):
     model, base_url = endpoint(base_url, model)
+    check_base_url(base_url)
     return {
         "base_url": base_url,
         "api_key": resolve_api_key(api_key),

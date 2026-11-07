@@ -30,6 +30,8 @@ import os
 import tempfile
 import threading
 
+from . import fsutil
+
 FORMAT = 1
 SUFFIX = ".cassette.json"
 #: The largest cassette read (and so, with a margin, written): bigger is a
@@ -193,7 +195,7 @@ class Tape:
             mask = os.umask(0o022)
             os.umask(mask)
             os.chmod(tmp, 0o666 & ~mask)
-            os.replace(tmp, self.path)
+            fsutil.replace(tmp, self.path)
         except BaseException:
             try:
                 os.unlink(tmp)

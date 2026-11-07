@@ -13,13 +13,10 @@ import json
 import os
 import re
 import socket
-import subprocess
-import sys
 import tempfile
 import threading
 import time
 import unittest
-import urllib.request
 from contextlib import redirect_stderr, redirect_stdout
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from unittest import mock

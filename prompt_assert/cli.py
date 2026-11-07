@@ -50,7 +50,7 @@ from . import scan as scan_mod
 from . import suite as suite_mod
 from .textsafe import clean
 
-VERSION = "0.4.0"
+from . import __version__ as VERSION  # one place: prompt_assert/__init__.py
 
 
 def _harden_streams() -> None:
@@ -220,7 +220,7 @@ def scaffold_example(root: str) -> list[str]:
                         ("sentiment.cases.yaml", INIT_CASES)]:
         p = os.path.join(d, fn)
         if not os.path.exists(p):
-            with open(p, "w", encoding="utf-8") as f:
+            with open(p, "w", encoding="utf-8", newline="\n") as f:
                 f.write(content)
             written.append(fn)
     return written
@@ -271,14 +271,21 @@ def _demo_root(args) -> str:
 
 
 def cmd_list(args) -> int:
+    as_json = getattr(args, "format", "human") == "json"
     prompts = suite_mod.list_prompts(args.root)
     if not prompts:
-        print("no prompts found — run `prompt-assert init`")
+        if as_json:
+            print(json.dumps({"prompts": []}))
+        else:
+            print("no prompts found — run `prompt-assert init`")
         return 0
     problems = []
+    listed = []
     for name, versions in prompts.items():
+        count = 0
         try:
-            shown = f"{len(suite_mod.load_cases(args.root, name))} cases"
+            count = len(suite_mod.load_cases(args.root, name))
+            shown = f"{count} cases"
         except FileNotFoundError:
             shown = "0 cases"
         except ValueError as e:
@@ -287,7 +294,13 @@ def cmd_list(args) -> int:
         except OSError as e:
             shown = "unreadable cases file"
             problems.append(runner_mod.error_text(e))
-        print(f"{name}: versions {', '.join(versions)} ({shown})")
+        listed.append({"name": name, "versions": versions, "cases": count,
+                       "status": "ok" if shown.endswith("cases")
+                       else shown})
+        if not as_json:
+            print(f"{name}: versions {', '.join(versions)} ({shown})")
+    if as_json:
+        print(json.dumps({"prompts": listed}, indent=2))
     for problem in problems:
         print(f"error: {problem}", file=sys.stderr)
     return 2 if problems else 0
@@ -918,10 +931,11 @@ def build_parser() -> argparse.ArgumentParser:
                         "are looked for in it (default: the current "
                         "directory). Give it before the subcommand.")
     _add_model_options(p, on_subcommand=False)
-    sub = p.add_subparsers(dest="cmd", required=True)
+    sub = p.add_subparsers(dest="cmd", metavar="{init,list,run,plan,corpus,diff}")
 
     sub.add_parser("init", help="Scaffold prompts/ with an example.")
-    sub.add_parser("list", help="List prompts, versions, case counts.")
+    ls = sub.add_parser("list", help="List prompts, versions, case counts.")
+    ls.add_argument("--format", choices=["human", "json"], default="human")
 
     r = sub.add_parser("run", help="Run golden cases against a version "
                                    "(or --all: every prompt x every version).")
@@ -1009,7 +1023,17 @@ def main(argv=None) -> int:
     with contextlib.ExitStack() as stack:
         # `... | head -1` must neither traceback nor change the exit code.
         stack.enter_context(_closed_pipe_tolerant())
-        args = build_parser().parse_args(argv)
+        parser = build_parser()
+        args = parser.parse_args(argv)
+        if args.cmd is None:
+            print("prompt-assert: no command given. New here? Start with:\n"
+                  "  prompt-assert init                  "
+                  "# scaffold prompts/ with an example\n"
+                  "  prompt-assert --demo run --all      "
+                  "# try it with a built-in fake model\n"
+                  "  prompt-assert --help                # everything else",
+                  file=sys.stderr)
+            return 2
         # Resources a subcommand opens (the demo's scaffold dir) are
         # released here, however the command ends.
         args.cleanup = stack
@@ -1041,6 +1065,8 @@ def main(argv=None) -> int:
             # configuration error. Say so before the first request, whether
             # or not the cache could have answered
             try:
+                model_mod.check_base_url(
+                    model_mod.endpoint(args.base_url, args.model)[1])
                 model_mod.check_key(model_mod.resolve_api_key(args.api_key))
                 model_mod.resolve_timeout(args.timeout)
                 model_mod.resolve_max_reply_bytes(args.max_reply_bytes)
