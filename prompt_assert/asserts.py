@@ -15,6 +15,15 @@ Supported assertions (each is a one-key dict in the case's `assert` list):
   schema: {...}            parsed JSON validates (mini validator below)
   max_tokens: n / min_tokens: n   ~chars/4 token estimate (documented)
 
+Security assertions (heuristics, see scan.py; they never echo what they find):
+
+  no_pii: true | [email, phone, card, ssn, sin, ip]
+  no_secrets: true         API keys, tokens, private keys, credentials
+  no_hidden_chars: true | emoji_ok     zero-width / bidi / tag characters
+  no_urls: true | [domain, ...]        no links, or only to these domains
+  no_prompt_leak: true | N  the reply repeats no run of N (default 8) words
+                           of the prompt text itself
+
 Each returns (passed: bool, detail: str). A malformed assertion (unknown
 kind, YAML null/bool where text is needed, a non-integer token count, an
 invalid regex, a schema the validator cannot enforce) raises ValueError
@@ -37,7 +46,7 @@ import difflib
 import json
 import re
 
-from . import miniyaml
+from . import miniyaml, scan
 
 
 def estimate_tokens(text: str) -> int:
@@ -186,8 +195,13 @@ LIST_KINDS = ("contains_any", "contains_all")
 COUNT_KINDS = ("max_tokens", "min_tokens")
 #: Every assertion name. `judge` is put to a model by the runner; evaluate()
 #: decides all the others itself.
+SECURITY_KINDS = ("no_pii", "no_secrets", "no_hidden_chars", "no_urls",
+                  "no_prompt_leak")
 KINDS = (TEXT_KINDS + LIST_KINDS + ("json_valid", "schema") + COUNT_KINDS
-         + ("judge",))
+         + SECURITY_KINDS + ("judge",))
+#: no_prompt_leak: words in a run, and the bounds on a value given.
+LEAK_DEFAULT = 8
+LEAK_MIN, LEAK_MAX = 3, 200
 #: At most this many texts in one contains_any / contains_all.
 MAX_LIST_ITEMS = 100
 
@@ -265,6 +279,57 @@ def _count(kind: str, want) -> int:
     return number
 
 
+def _security(kind: str, want):
+    """The operand of a security assertion in working form."""
+    if kind == "no_secrets":
+        if want is True:
+            return True
+        raise ValueError("no_secrets: takes true, got " + describe(want))
+    if kind == "no_hidden_chars":
+        if want is True or want == "emoji_ok":
+            return want
+        raise ValueError("no_hidden_chars: takes true, or emoji_ok to allow "
+                         "the zero-width joiner and emoji selector that "
+                         "emoji need, got " + describe(want))
+    if kind == "no_pii":
+        if want is True:
+            return list(scan.PII_DEFAULT)
+        if (isinstance(want, list) and want
+                and all(isinstance(k, str) and k in scan.PII_KINDS
+                        for k in want)):
+            return list(dict.fromkeys(want))
+        raise ValueError(
+            f"no_pii: takes true, or a list of kinds from "
+            f"{', '.join(scan.PII_KINDS)}, got {describe(want)}")
+    if kind == "no_urls":
+        if want is True:
+            return True
+        if isinstance(want, list) and want:
+            hosts = []
+            for i, item in enumerate(want):
+                host = _text(f"no_urls[{i}]", item).strip().lower().rstrip(".")
+                if "/" in host or " " in host or "." not in host:
+                    raise ValueError(
+                        f"no_urls[{i}]: {item!r} is not a domain name - "
+                        f"write the domain only, e.g. example.com")
+                hosts.append(host)
+            return list(dict.fromkeys(hosts))
+        raise ValueError("no_urls: takes true (no links at all) or a list "
+                         "of allowed domains, e.g. [example.com], got "
+                         + describe(want))
+    # no_prompt_leak
+    if want is True:
+        return LEAK_DEFAULT
+    n = None
+    if isinstance(want, int) and not isinstance(want, bool):
+        n = want
+    if n is None or not LEAK_MIN <= n <= LEAK_MAX:
+        raise ValueError(f"no_prompt_leak: takes true ({LEAK_DEFAULT} "
+                         f"words) or a number of words from {LEAK_MIN} to "
+                         f"{LEAK_MAX}, got {describe(want)}")
+    return n
+
+
 def _pattern(kind: str, want) -> re.Pattern:
     text = _text(kind, want)
     try:
@@ -335,13 +400,54 @@ def check(assertion) -> dict:
     if kind == "schema":
         check_schema(want)
         return {kind: want}
+    if kind in SECURITY_KINDS:
+        return {kind: _security(kind, want)}
     return {kind: _judge(want)}
 
 
-def evaluate(assertion: dict, output: str) -> tuple[bool, str]:
+def _evaluate_security(kind: str, want, output: str,
+                       template: str | None) -> tuple[bool, str]:
+    if kind == "no_secrets":
+        found = scan.find_secrets(output)
+        return (not found, "no secret-shaped text" if not found else
+                "contains " + ", ".join(found) + " (value not shown)")
+    if kind == "no_pii":
+        found = scan.find_pii(output, want)
+        return (not found, "no personal data of the kinds checked"
+                if not found else "contains " + ", ".join(
+                    f"{k} x{n}" for k, n in found.items())
+                + " (value not shown)")
+    if kind == "no_hidden_chars":
+        found = scan.find_hidden(output, emoji_ok=(want == "emoji_ok"))
+        return (not found, "no invisible characters" if not found else
+                "contains invisible characters " + ", ".join(found[:5])
+                + (f" and {len(found) - 5} more" if len(found) > 5 else ""))
+    if kind == "no_urls":
+        hosts = scan.find_urls(output)
+        bad = hosts if want is True else [
+            h for h in hosts if not scan.host_allowed(h, want)]
+        bad = list(dict.fromkeys(bad))
+        return (not bad, "no links" if want is True and not hosts else
+                "no links outside the allowed domains" if not bad else
+                "links to " + ", ".join(bad[:5])
+                + (f" and {len(bad) - 5} more" if len(bad) > 5 else ""))
+    # no_prompt_leak
+    if template is None:
+        raise ValueError("no_prompt_leak: needs the prompt text, which only "
+                         "a run supplies (pass template= to evaluate)")
+    gram = scan.find_prompt_leak(output, template, want)
+    return (not gram, f"repeats no {want}-word run of the prompt" if not gram
+            else f"repeats the prompt: {gram!r}")
+
+
+def evaluate(assertion: dict, output: str,
+             template: str | None = None) -> tuple[bool, str]:
     """Decide one assertion about a reply: (passed, detail). ValueError when
-    the assertion itself cannot be used (see check)."""
+    the assertion itself cannot be used (see check). `template` is the
+    prompt text (placeholders unfilled): only no_prompt_leak reads it."""
     kind, want = next(iter(check(assertion).items()))
+    if kind in SECURITY_KINDS:
+        return _evaluate_security(kind, want, output, template)
 
     if kind == "contains":
         ok = want in output

@@ -108,7 +108,7 @@ class TestPackagingMetadata(unittest.TestCase):
             self.assertTrue(callable(getattr(importlib.import_module(module),
                                              attr)))
         self.assertEqual(project["name"], "prompt-assert")
-        self.assertEqual(project["version"], "0.3.0")
+        self.assertEqual(project["version"], "0.4.0")
 
 
 class TestSourceDistribution(unittest.TestCase):

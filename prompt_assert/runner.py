@@ -18,9 +18,12 @@ import math
 import os
 import re
 import sys
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 from . import asserts as asserts_mod
+from . import cassette as cassette_mod
 from . import model as model_mod
 from . import suite as suite_mod
 
@@ -80,6 +83,9 @@ class CaseResult:
     passes: int | None = None
     #: Wall-clock seconds spent on the case, model and judge calls included.
     seconds: float = 0.0
+    #: With --early-stop: True when the case was decided before all of its
+    #: --repeat runs were made (`runs` is then the number actually made).
+    stopped_early: bool = False
 
     @property
     def flaky(self) -> bool:
@@ -97,8 +103,10 @@ class CaseResult:
                 {"assertion": a.assertion, "passed": a.passed,
                  "detail": a.detail} for a in self.assertions],
         }
-        if self.runs > 1:
+        if self.runs > 1 or self.stopped_early:
             d.update(runs=self.runs, passes=self.passes, flaky=self.flaky)
+        if self.stopped_early:
+            d["stopped_early"] = True
         return d
 
 
@@ -124,6 +132,7 @@ def _cache_read(root: str, key: str) -> dict | None:
 #: failure of a command prints one warning and ends that root's cache
 #: writes; cli.main() empties this at the start of every command.
 _cache_off: dict[str, str] = {}
+_cache_off_lock = threading.Lock()
 
 
 def reset_cache_warnings() -> None:
@@ -150,9 +159,12 @@ def _cache_write(root: str, key: str, payload: dict) -> bool:
         with open(p, "w", encoding="utf-8") as f:
             json.dump(payload, f)
     except OSError as e:
-        why = _cache_off[root] = error_text(e)
-        print(f"warning: cache disabled: cannot write {why} "
-              "(the run goes on without it)", file=sys.stderr)
+        with _cache_off_lock:             # --jobs: warn once, not per thread
+            first = root not in _cache_off
+            why = _cache_off.setdefault(root, error_text(e))
+        if first:
+            print(f"warning: cache disabled: cannot write {why} "
+                  "(the run goes on without it)", file=sys.stderr)
         return False
     return True
 
@@ -176,34 +188,65 @@ def _judge_key(prompt_name: str, version: str, case_name: str,
     return "judge-" + h.hexdigest()[:32]
 
 
+def sample_key(key: str, sample: int) -> str:
+    """The cache key of run number `sample` (1, 2 ...) of --repeat; run 0
+    keeps the plain key."""
+    return hashlib.sha256(f"{key}\x00sample\x00{sample}".encode()
+                          ).hexdigest()[:32]
+
+
+def _model_label(model_kw: dict) -> str:
+    return _provider(model_kw)[0]
+
+
 def run_case(root: str, prompt_name: str, version: str, prompt_text: str,
              case: dict, model_kw: dict, use_cache: bool = True,
              judge_model_kw: dict | None = None,
-             sample: int = 0) -> CaseResult:
+             sample: int = 0,
+             tape: cassette_mod.Tape | None = None) -> CaseResult:
     """One run of one case. `sample` numbers the runs of --repeat: run 0
     shares the cache with a plain run, run 1, 2 ... each have their own
-    entry, so a repeat never re-reads the first answer as the second."""
+    entry, so a repeat never re-reads the first answer as the second.
+
+    The response cache is keyed by what is sent to the model (the rendered
+    prompt) and the model and endpoint - not by the case's assertions or
+    name, so editing an assertion re-runs nothing. With a `tape` in replay
+    mode the answer comes from the cassette and no model is contacted; in
+    record mode the model is always called and the answer written to it."""
     model_name, base_url = _provider(model_kw)
-    key = suite_mod.cache_key(prompt_name, version, prompt_text, case,
-                              model_name, base_url)
+    rendered = suite_mod.render(prompt_text, case["input"], case.get("vars"))
+    key = suite_mod.response_key(rendered, model_name, base_url)
     if sample:
-        key = hashlib.sha256(f"{key}\x00sample\x00{sample}".encode()
-                             ).hexdigest()[:32]
+        key = sample_key(key, sample)
+    replay = tape is not None and tape.mode == "replay"
+    record = tape is not None and tape.mode == "record"
     cached = False
-    if use_cache:
-        hit = _cache_read(root, key)
-        if hit is not None and isinstance(hit.get("output"), str):
-            output, cached = hit["output"], True
-    if not cached:
-        rendered = suite_mod.render(prompt_text, case["input"],
-                                    case.get("vars"))
-        try:
-            output = model_mod.complete(rendered, **model_kw)
-        except model_mod.ModelError as e:
-            return CaseResult(name=case["name"], passed=False, output="",
-                              assertions=[], error=str(e))
-        if use_cache:  # same contract as judge verdicts: off = no I/O
-            _cache_write(root, key, {"output": output})
+    if replay:
+        output = tape.get(rendered, sample)
+        if output is None:
+            return CaseResult(
+                name=case["name"], passed=False, output="", assertions=[],
+                error=("no recording for this case"
+                       + (f" (run {sample + 1})" if sample else "")
+                       + f" in {tape.path}: the prompt or the input changed "
+                       "since it was recorded - run `run --record` and "
+                       "commit the result"))
+        cached = True
+    else:
+        if use_cache and not record:
+            hit = _cache_read(root, key)
+            if hit is not None and isinstance(hit.get("output"), str):
+                output, cached = hit["output"], True
+        if not cached:
+            try:
+                output = model_mod.complete(rendered, **model_kw)
+            except model_mod.ModelError as e:
+                return CaseResult(name=case["name"], passed=False, output="",
+                                  assertions=[], error=str(e))
+            if record:
+                tape.put(rendered, output, sample, model_name)
+            elif use_cache:  # same contract as judge verdicts: off = no I/O
+                _cache_write(root, key, {"output": output})
 
     results: list[AssertionResult] = []
     for assertion in case["assert"]:
@@ -218,27 +261,42 @@ def run_case(root: str, prompt_name: str, version: str, prompt_text: str,
         if "judge" in assertion:
             spec = assertion["judge"]
             rubric = spec["rubric"] if isinstance(spec, dict) else spec
+            jmodel_kw = judge_model_kw or model_kw
             jkey = _judge_key(prompt_name, version, case["name"],
-                              output, rubric,
-                              "|".join(_provider(judge_model_kw or model_kw)))
-            hit = _cache_read(root, jkey) if use_cache else None
-            if hit is not None and "passed" in hit and "detail" in hit:
-                passed, detail = bool(hit["passed"]), str(hit["detail"])
+                              output, rubric, "|".join(_provider(jmodel_kw)))
+            if replay:
+                verdict = tape.get_judge(rubric, output)
+                if verdict is None:
+                    return CaseResult(
+                        name=case["name"], passed=False, output=output,
+                        assertions=[],
+                        error=f"no recorded judge verdict in {tape.path}: "
+                              "run `run --record` and commit the result")
+                passed, detail = verdict
             else:
-                try:
-                    passed, detail = model_mod.judge(
-                        output, rubric, **(judge_model_kw or model_kw))
-                except model_mod.ModelError as e:
-                    # transient outage — report, never cache
-                    passed, detail = False, f"judge unavailable: {e}"
+                hit = (_cache_read(root, jkey)
+                       if use_cache and not record else None)
+                if hit is not None and "passed" in hit and "detail" in hit:
+                    passed, detail = bool(hit["passed"]), str(hit["detail"])
                 else:
-                    if use_cache:
-                        _cache_write(root, jkey,
-                                     {"passed": passed, "detail": detail})
+                    try:
+                        passed, detail = model_mod.judge(output, rubric,
+                                                         **jmodel_kw)
+                    except model_mod.ModelError as e:
+                        # transient outage - report, never cache
+                        passed, detail = False, f"judge unavailable: {e}"
+                    else:
+                        if record:
+                            tape.put_judge(rubric, output, passed, detail,
+                                           _model_label(jmodel_kw))
+                        elif use_cache:
+                            _cache_write(root, jkey, {"passed": passed,
+                                                      "detail": detail})
             results.append(AssertionResult(assertion, passed, detail))
             continue
         try:
-            passed, detail = asserts_mod.evaluate(assertion, output)
+            passed, detail = asserts_mod.evaluate(assertion, output,
+                                                  template=prompt_text)
         except ValueError as e:
             passed, detail = False, f"bad assertion: {e}"
         results.append(AssertionResult(assertion, passed, detail))
@@ -305,30 +363,73 @@ def required_passes(runs: int, rate: float) -> int:
     return max(1, math.ceil(runs * rate - 1e-9))
 
 
+def decided(passes: int, ran: int, repeat: int, need: int) -> str:
+    """"pass" or "fail" once the gate cannot change whatever the remaining
+    runs say, else "". Exact, not statistical: passing `need` of `repeat`
+    runs is settled at the need-th pass, and it is lost at the first moment
+    more than `repeat - need` runs have failed."""
+    if passes >= need:
+        return "pass"
+    if ran - passes > repeat - need:
+        return "fail"
+    return ""
+
+
 def _repeat_case(root, prompt_name, version, prompt_text, case, model_kw,
-                 use_cache, repeat, min_pass_rate) -> CaseResult:
+                 use_cache, repeat, min_pass_rate, tape=None,
+                 early_stop=False, judge_model_kw=None) -> CaseResult:
     """Run `case` `repeat` times; it passes when enough runs passed. The
-    first run the model could not answer ends it with that error."""
+    first run the model could not answer ends it with that error. With
+    early_stop the runs end as soon as the verdict is settled (see
+    decided()): the same verdict for fewer calls, but `runs` then counts the
+    runs made and a late failure of a case already settled goes unseen."""
     started = time.monotonic()
+    need = required_passes(repeat, min_pass_rate)
     runs: list[CaseResult] = []
     for sample in range(repeat):
         r = run_case(root, prompt_name, version, prompt_text, case,
-                     model_kw, use_cache, sample=sample)
+                     model_kw, use_cache, judge_model_kw=judge_model_kw,
+                     sample=sample, tape=tape)
         if r.error:
             r.seconds = time.monotonic() - started
             return r
         runs.append(r)
+        if early_stop and repeat > 1 and decided(
+                sum(1 for x in runs if x.passed), len(runs), repeat, need):
+            break
     if repeat == 1:
         only = runs[0]
         only.seconds = time.monotonic() - started
         return only
     passes = sum(1 for r in runs if r.passed)
-    passed = passes >= required_passes(repeat, min_pass_rate)
+    passed = passes >= need
     shown = next((r for r in runs if r.passed == passed), runs[0])
     return dataclasses.replace(
         shown, passed=passed,
-        cached=all(r.cached for r in runs), runs=repeat, passes=passes,
-        seconds=time.monotonic() - started)
+        cached=all(r.cached for r in runs), runs=len(runs), passes=passes,
+        seconds=time.monotonic() - started,
+        stopped_early=len(runs) < repeat)
+
+
+MAX_JOBS = 64
+
+
+def parse_jobs(value) -> int:
+    """--jobs: how many cases run at once, 1 to MAX_JOBS."""
+    text = str(value).strip()
+    if not re.fullmatch(r"[0-9]+", text) or not 1 <= int(text) <= MAX_JOBS:
+        raise ValueError(f"must be a whole number from 1 to {MAX_JOBS}, "
+                         f"got {value!r}")
+    return int(text)
+
+
+def select_cases(cases: list[dict], tags=None) -> list[dict]:
+    """The cases carrying at least one of `tags` (all of them when none are
+    given). Tags are matched exactly, case-sensitively."""
+    if not tags:
+        return list(cases)
+    wanted = set(tags)
+    return [c for c in cases if wanted.intersection(c.get("tags", ()))]
 
 
 def run_suite(root: str, prompt_name: str, version: str,
@@ -337,11 +438,15 @@ def run_suite(root: str, prompt_name: str, version: str,
               use_cache: bool = True,
               fail_fast: bool = True,
               repeat: int = 1,
-              min_pass_rate: float = 1.0) -> tuple[list[CaseResult], str]:
+              min_pass_rate: float = 1.0,
+              jobs: int = 1,
+              early_stop: bool = False,
+              tape: cassette_mod.Tape | None = None,
+              tags=None) -> tuple[list[CaseResult], str]:
     """Run every case of prompt_name against `version`.
 
     fail_fast (default): the first case the model could not answer
-    (unreachable, timeout, HTTP 401/404 ...) ends the run — the remaining
+    (unreachable, timeout, HTTP 401/404 ...) ends the run - the remaining
     cases would only repeat the same error, each paying the timeout
     again. The returned list is then shorter than the case list; its
     last entry carries the error.
@@ -349,20 +454,54 @@ def run_suite(root: str, prompt_name: str, version: str,
     repeat > 1 runs each case that many times (a model at temperature 0
     still varies on many providers); a case passes when at least
     min_pass_rate of its runs passed (default 1.0: every run). See
-    CaseResult.runs / passes / flaky.
+    CaseResult.runs / passes / flaky. early_stop ends a case's runs once
+    its verdict is settled.
+
+    jobs > 1 runs that many cases at once (results stay in case order; the
+    first error in case order still ends the list, and cases not yet started
+    are not started). tape replays or records answers (see cassette.py);
+    tags keeps only the cases with one of those tags.
     """
     repeat = parse_repeat(repeat)
     min_pass_rate = parse_pass_rate(min_pass_rate)
     check_repeat_options(repeat, min_pass_rate)
+    jobs = parse_jobs(jobs)
     prompt_text = suite_mod.load_prompt(root, prompt_name, version)
     cases = cases if cases is not None else suite_mod.load_cases(root,
                                                                  prompt_name)
+    cases = select_cases(cases, tags)
     _warn_about_template(root, prompt_name, version, prompt_text, cases)
-    results = []
-    for c in cases:
-        r = _repeat_case(root, prompt_name, version, prompt_text, c,
-                         model_kw or {}, use_cache, repeat, min_pass_rate)
-        results.append(r)
-        if fail_fast and r.error:
-            break
+
+    def one(c):
+        return _repeat_case(root, prompt_name, version, prompt_text, c,
+                            model_kw or {}, use_cache, repeat,
+                            min_pass_rate, tape=tape, early_stop=early_stop)
+
+    results: list[CaseResult] = []
+    if jobs == 1 or len(cases) < 2:
+        for c in cases:
+            r = one(c)
+            results.append(r)
+            if fail_fast and r.error:
+                break
+        return results, prompt_text
+
+    stop = threading.Event()
+
+    def guarded(c):
+        if stop.is_set():
+            return None          # an earlier case already failed to run
+        r = one(c)
+        if r.error and fail_fast:
+            stop.set()
+        return r
+
+    with ThreadPoolExecutor(max_workers=min(jobs, len(cases)),
+                            thread_name_prefix="prompt-assert-case") as pool:
+        for r in pool.map(guarded, cases):
+            if r is None:
+                break
+            results.append(r)
+            if fail_fast and r.error:
+                break
     return results, prompt_text

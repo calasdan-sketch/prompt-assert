@@ -1,8 +1,9 @@
 # prompt-assert
 
 **Catch prompt regressions in CI: golden cases in YAML, deterministic
-assertions, exit 1 on a regression. Zero dependencies, no telemetry, any
-OpenAI-compatible model (Ollama, LM Studio, hosted APIs).**
+assertions, exit 1 on a regression. CI replays committed recordings, so it
+costs nothing and gives the same verdict every time. Zero dependencies, no
+telemetry, any OpenAI-compatible model (Ollama, LM Studio, hosted APIs).**
 
 *Formerly promptregress.* The old `promptregress` command and `PROMPTREGRESS_*` environment variables still work; the import package is now `prompt_assert`.
 
@@ -49,10 +50,11 @@ Zero dependencies — Python 3.10+ stdlib only.
 pip install prompt-assert
 ```
 
-That is the last release on PyPI (0.2.0). This branch is 0.3.0 (unreleased:
-`--repeat`, `--junit`, `diff --fail-on-regression`, the new assertions and
-the terminal-safe output below); until it is released, install it from the
-repository:
+That is the last release on PyPI (0.2.0). This branch is 0.4.0 (unreleased:
+cassettes, security assertions, `plan` and budgets, `--jobs`, `--tag`,
+`--changed-since`, Markdown and GitHub reports, on top of 0.3.0's `--repeat`,
+`--junit` and `diff --fail-on-regression`); until it is released, install it
+from the repository:
 
 ```bash
 pip install git+https://github.com/calasdan-sketch/prompt-assert
@@ -76,6 +78,8 @@ prompt-assert --demo run --prompt sentiment --version v1 # zero-setup trial, no 
 prompt-assert --demo diff v1 v2 --prompt sentiment       # A/B on the same golden cases
 prompt-assert run --all                                  # every prompt x every version (CI)
 prompt-assert list
+prompt-assert plan --all                                 # calls it would make, no model contact
+prompt-assert corpus injection > prompts/mybot.cases.yaml  # 25 injection/leak cases
 ```
 
 `--demo` runs the suite against a built-in fake model, so you can trial the
@@ -176,7 +180,8 @@ like any other.
 
 A case has `name` (optional: `case-0`, `case-1` ... when left out), `input`,
 `vars` (optional extra template variables: `{{tone}}` in the prompt is
-replaced by the text of `tone`) and `assert` - nothing else. A key such as
+replaced by the text of `tone`), `tags` (optional: `[smoke, billing]`, for
+`--tag`) and `assert` - nothing else. A key such as
 `varss:` would otherwise be dropped without a word; notes go in a `#`
 comment.
 
@@ -217,7 +222,9 @@ assertion fails that case with `bad assertion: ...`, it never crashes the run.
 
 `contains` · `not_contains` · `icontains` · `equals` · `contains_any` ·
 `contains_all` · `regex` · `not_regex` · `starts_with` · `ends_with` ·
-`json_valid` · `schema` · `max_tokens` · `min_tokens`.
+`json_valid` · `schema` · `max_tokens` · `min_tokens`, and the
+[security assertions](#security-assertions-and-the-injection-corpus)
+`no_pii` · `no_secrets` · `no_hidden_chars` · `no_urls` · `no_prompt_leak`.
 
 ```yaml
 assert:
@@ -381,11 +388,141 @@ sentiment.v1: ...
 - `--format json` gives every repeated case `runs`, `passes` and `flaky`
   (same meaning as above).
 
+## CI that costs nothing: cassettes
+
+The response cache lives in `.prompt-assert/` and is git-ignored, so a fresh
+CI checkout pays for every call. A **cassette** is the committed version:
+
+```bash
+prompt-assert run --all --record     # once, on your machine: calls the model,
+                                     # writes prompts/<name>.cassette.json
+git add prompts/*.cassette.json      # review the diff, then commit it
+prompt-assert run --all --replay     # in CI: no model, no URL, no key, no cost
+```
+
+- An answer is found by the exact text sent to the model (and the
+  `--repeat` run number). Editing an assertion, a tag or a case name keeps
+  every recording valid; editing the prompt or an input makes exactly the
+  affected cases miss.
+- A miss in `--replay` is exit 2 with the fix (`run --record`), never a
+  pass and never a live call. A missing, damaged or oversized cassette is
+  exit 2 too.
+- LLM-judge verdicts are recorded as well.
+- The file is sorted JSON with every non-ASCII character escaped, so an
+  invisible character in a recorded reply shows up in the pull request as
+  `\u200b`. Recording twice gives byte-identical files.
+- Replies can contain anything the model said. `--record` warns when one
+  looks like a secret (names the kind, never the value), but read the diff
+  before you commit.
+- `--record` of one version keeps the other versions' recordings; a full
+  `run --all --record` also drops recordings nothing asks for. `run --all
+  --replay` notes recordings nothing used.
+- Not available with `--demo`.
+
+The cache key changed in 0.4.0: it is now the text sent plus the model and
+endpoint, not the whole case. Editing an assertion used to re-run every
+case against the model (20 cases: 20 calls); now it runs none. Old cache
+files are simply not used again (the cache is disposable).
+
+## Security assertions and the injection corpus
+
+Deterministic checks that need no model and never echo what they find (a
+detail says "contains AWS access key id (value not shown)"):
+
+```yaml
+assert:
+  - no_secrets: true                       # API keys, tokens, private keys, credentials
+  - no_pii: true                           # email, phone, card (Luhn), US SSN, Canadian SIN (Luhn)
+  - no_pii: [email, ip]                    # or pick kinds: email phone card ssn sin ip
+  - no_hidden_chars: true                  # zero-width, bidi, tag characters ("ASCII smuggling")
+  - no_hidden_chars: emoji_ok              # same, but allow the joiner and selector emoji need
+  - no_urls: true                          # no links at all (markdown-image exfiltration)
+  - no_urls: [docs.example.com]            # links only to these domains (and subdomains)
+  - no_prompt_leak: true                   # reply repeats no 8-word run of the prompt itself
+  - no_prompt_leak: 5                      # ... or a run of 5 to 200 words
+```
+
+`no_prompt_leak` reads the prompt text of the version under test with the
+`{{...}}` placeholders cut out, so it follows your prompt as you edit it (a
+hand-written `not_contains` list does not) and repeating the case's own
+input is not a leak. These are heuristics: they find the common shapes, not
+every secret or every personal detail (no names, no addresses), and a pass
+means "none of these shapes".
+
+`prompt-assert corpus injection > prompts/mybot.cases.yaml` writes 25 cases
+for a prompt that takes untrusted text in `{{input}}`: instruction override,
+fake system messages, delimiter breaks, role-play, prompt extraction, link
+and image exfiltration, base64, invisible tag-character and zero-width
+payloads, instructions hidden in documents, poisoned few-shot examples,
+authority and urgency claims, secret and PII requests. Each case asserts
+that the reply does not echo the canary, contains no invisible characters,
+links, secrets or personal data, and does not repeat the prompt. They are
+tagged `injection` (`--tag injection`). `--canary TEXT` and
+`--allow-domain D` adjust it. It is a floor, not a red team: failing a case
+is a real hole, passing all of them proves nothing about attacks it does not
+contain. The invisible characters in the file are written as escapes, so
+the file is plain ASCII and reviewable.
+
+## Know the cost before you run it
+
+```bash
+prompt-assert plan --all                       # live calls, cached/recorded, ~input tokens
+prompt-assert run --all --max-calls 50         # exit 2 BEFORE the first request if over
+prompt-assert run --all --max-input-tokens 200000
+prompt-assert plan --all --price-in 1 --price-out 3 --assume-output-tokens 200 --max-cost 2
+```
+
+`plan` reads prompts, cases, cache and cassettes and contacts no model. A run
+with a budget flag makes the same plan first and stops with exit 2 if it is
+over, so a prompt edit that suddenly needs thousands of fresh calls cannot
+spend them quietly. Tokens are estimated at one per 4 characters (+-30%);
+prices are yours to give (none is built in, they change); a cost needs all
+three of `--price-in`, `--price-out` (per million tokens) and
+`--assume-output-tokens`. Judge calls are reported as an upper bound and left
+out of tokens and cost. prompt-assert never calls a model unless you point it
+at one.
+
+## Speed and selection
+
+- `--jobs N` runs N cases at once (1 to 64; results keep case order; the
+  first case in order that cannot be answered still ends the list). Mind your
+  provider's rate limit.
+- `--early-stop` (with `--repeat`) ends a case's runs once its verdict can no
+  longer change: with 5 runs and a 60% gate, 3 passes settle it. Same
+  verdict, fewer calls; a late failure of a case already settled goes unseen,
+  so leave it off when you are hunting flakiness. `runs` then counts the runs
+  made and JSON adds `stopped_early`.
+- `tags:` on a case (`tags: [smoke, billing]` or `tags: smoke`) and
+  `--tag smoke` (repeatable, any match runs). A tag nothing has is exit 2,
+  never a green empty run.
+- `run --all --changed-since main` (also `plan`) runs only suites whose
+  `prompts/<name>.vN.txt`, `.cases.yaml` or `.cassette.json` differs from
+  that git revision (committed, edited or new). A bad revision, a missing
+  git or a folder that is not a repository is exit 2; "nothing changed" prints
+  `nothing to run` and exits 0.
+
+## Reports for pull requests
+
+```bash
+prompt-assert run --all --junit prompt-assert.xml \
+  --markdown "$GITHUB_STEP_SUMMARY" --github-annotations
+```
+
+`--markdown PATH` writes a summary (counts, a table per suite, the failing
+assertions and a cut of each failing output; under 60,000 characters, the
+limit of a GitHub comment is 65,536). `--github-annotations` prints an
+`::error file=prompts/<name>.cases.yaml` line per failed case and a
+`::warning` per flaky one (not with `--format json`). Everything that came
+from a model is cleaned first, so a reply cannot forge a report line or an
+annotation command.
+
 ## Caching
 
-Responses are cached in `.prompt-assert/cache/` keyed by prompt text + case
-+ model + base URL — `diff v1 v2` never pays twice and CI re-runs are cheap,
-and pointing at a different endpoint never reuses another provider's answers.
+Responses are cached in `.prompt-assert/cache/` keyed by the text sent to
+the model + model + base URL (not the case's assertions: editing one costs
+no call) — `diff v1 v2` never pays twice and re-runs are cheap, and pointing
+at a different endpoint never reuses another provider's answers. For CI use
+a [cassette](#ci-that-costs-nothing-cassettes), which is committed.
 LLM-judge verdicts are cached alongside, keyed by prompt version + case +
 output hash + judge model/base URL, so a re-run never re-pays the judge
 either (transient judge outages are reported, never cached). `--no-cache`
@@ -509,8 +646,18 @@ What this tool does not do, so you do not find out the hard way:
 - `schema` is a mini validator and the cases file is read by a YAML subset
   parser. What they do not understand is refused with an error, never
   ignored.
-- Requests run one after the other; there is no parallel mode (so
-  `--repeat 5` takes five times as long).
+- Requests run one after the other unless you pass `--jobs N` (then N
+  cases at once; `--repeat` runs of one case stay in order).
+- Cassettes replay what a model said once. They prove your assertions still
+  hold for those answers, not that the model would still say them: re-record
+  on a schedule (or when the model changes) and read the diff.
+- Multi-turn conversations and tool calls are not supported: a case is one
+  user message and one text reply, and a reply that is only a tool call is
+  reported as an error.
+- The injection corpus and the security assertions are heuristics (see
+  above); they are no substitute for a red-team.
+- The benchmark below uses a simulated model. It shows what the tool does with
+  a given behaviour, not how often a real model misbehaves.
 - With `--repeat`, a judge verdict is cached per output text: two runs that
   produced the same reply share one verdict, the judge is not asked twice.
 - `equals` / `icontains` compare text as stored: two spellings Unicode
@@ -522,28 +669,65 @@ What this tool does not do, so you do not find out the hard way:
 ## How it compares
 
 Statements about other tools come from their own docs and package pages
-(linked; checked 2026-11-06). "Not checked" means it was not verified here,
+(linked; checked 2026-11-06, rows added 2026-11-07 are marked by their date). "Not checked" means it was not verified here,
 not that the tool lacks it. Where they do more, it says so.
 
 | | prompt-assert | [promptfoo](https://www.promptfoo.dev/docs/usage/command-line) | [DeepEval](https://github.com/confident-ai/deepeval) | [Inspect](https://inspect.aisi.org.uk/) |
 |---|---|---|---|---|
 | Install | `pip`, Python stdlib only, no dependencies | Node.js CLI (`npx promptfoo@latest`) | `pip install deepeval` | `pip install inspect-ai` |
 | Usage telemetry | none: the only network calls go to the model endpoint you set | on by default, [`PROMPTFOO_DISABLE_TELEMETRY=1`](https://www.promptfoo.dev/docs/configuration/telemetry/) turns it off | on by default, [`DEEPEVAL_TELEMETRY_OPT_OUT=1`](https://deepeval.com/docs/faq) turns it off | not checked |
-| LLM-free assertions | 14 kinds (above) | [many more](https://www.promptfoo.dev/docs/configuration/expected-outputs/): `equals`, `is-json`, `is-sql`, ROUGE/BLEU, custom JS/Python, `not-` on any type ... | mostly LLM-judged metrics (40+); judge defaults to OpenAI unless you configure one ([FAQ](https://deepeval.com/docs/faq)) | built-in scorers incl. text match and model grading |
+| LLM-free assertions | 19 kinds (above), 5 of them security heuristics | [many more](https://www.promptfoo.dev/docs/configuration/expected-outputs/): `equals`, `is-json`, `is-sql`, ROUGE/BLEU, custom JS/Python, `not-` on any type ... | mostly LLM-judged metrics (40+); judge defaults to OpenAI unless you configure one ([FAQ](https://deepeval.com/docs/faq)) | built-in scorers incl. text match and model grading |
+| Install size, measured 2026-11-07 | about 0.3 MB, 2 s, no dependencies | `npm install promptfoo` 0.125.1 (MIT): 26 s, 734 MB, 413 packages in `node_modules` | `pip install deepeval` 4.3.3: 13 s, 105 MB, 66 distributions | wheel 0.3.288 alone is 35 MB with 40 required dependencies (`pip download --no-deps`; full install not measured) |
+| Answers committed to git and replayed in CI | yes: `--record` / `--replay` ([above](#ci-that-costs-nothing-cassettes)); a miss is exit 2 | local on-disk [cache](https://www.promptfoo.dev/docs/configuration/caching/); a committed replay mode was not found in its docs (unverified) | not checked | not checked |
+| Know the cost first | `plan`, `--max-calls` / `--max-input-tokens` / `--max-cost` stop before the first request | not checked | not checked | not checked |
+| Security checks without a model | `no_pii`, `no_secrets`, `no_hidden_chars`, `no_urls`, `no_prompt_leak`, a 25-case injection corpus | red-team plugins (model-driven, far wider) | not checked | not checked |
 | Repeat each case | `--repeat N` with `--min-pass-rate` and a `flaky:` report | `--repeat N` | not checked | epochs |
 | JUnit XML | `--junit PATH` | `-o results.junit.xml` | not checked | not checked |
 | A/B two prompt versions | `diff v1 v2`, optional `--fail-on-regression` | several prompts in one eval (unverified) | not checked | not checked |
 | Malformed suite | refused before any model call, exit 2 (unknown assertion, empty `assert`, unsupported schema keyword ...) | not checked | not checked | not checked |
 | Model output in the terminal | control / bidi / zero-width characters shown as escapes | not checked | not checked | not checked |
 
-Where the others are stronger: promptfoo runs requests in parallel
-(`-j`), has a browser UI (`promptfoo view`), red-teaming (`promptfoo
+Where the others are stronger: promptfoo has a browser UI (`promptfoo view`), red-teaming (`promptfoo
 redteam`) and far more assertion types; DeepEval has RAG, agent and conversation metrics; Inspect
 has many built-in scorers, epochs and a log viewer (Inspect View).
-prompt-assert is the small, strict, zero-dependency slot: one YAML file of
+None of them was run against a real model here and no speed comparison
+with them is claimed: the numbers above are install facts and the benchmark
+below is prompt-assert's own. prompt-assert is the small, strict,
+zero-dependency slot: one YAML file of
 golden cases per prompt and a CLI whose exit code you can gate a merge on.
 Hosted platforms (Langfuse, LangSmith, Braintrust) add tracing and team
 workflows; this has none of that.
+
+## Benchmark (offline, re-runnable)
+
+`python3 benchmarks/bench.py` (about 10 seconds, no network, no model, no
+key, no cost; `--write` refreshes `benchmarks/results.json` and
+`benchmarks/RESULTS.md`, a test fails if they drift). It runs prompt-assert's
+real loader, assertions, runner, cache, cassette and planner against a
+**simulated** model that reacts to what a prompt says by fixed rules. So it
+measures what the tool does with a behaviour, not how often a real model
+misbehaves after a real edit; the 44 edits and their harmless / harmful
+labels are ours and are listed in the script.
+
+| assertion suite (same 12 tickets) | harmful edits caught | harmless edits flagged |
+|---|---:|---:|
+| `contains: <label>` only | 0 / 25 | 0 / 19 |
+| `equals` + `max_tokens` + canary check | 21 / 25 | 0 / 19 |
+| 0.3.0 vocabulary plus a hand-written regex for each known risk | 23 / 25 | 0 / 19 |
+| 0.4.0 security assertions | 25 / 25 | 0 / 19 |
+
+The two edits the hand-written suite misses reword the prompt, so its
+hard-coded phrases no longer match what the model leaks; `no_prompt_leak`
+reads the current prompt. With a flaky model (4% of calls fail at random;
+300 simulated days), on a prompt with no regression: one run raises a false
+alarm 27.7% of the time, five runs that must all pass 82.7%, five runs with a
+60% gate 0.7%; all of them catch a real regression (a case that fails every
+call). `--early-stop` gives the same verdicts with 37.2 calls per run instead
+of 60 (60% gate) or 49.4 instead of 60 (80% gate). On a 200-case suite,
+editing one assertion costs 200 model calls with the 0.3.0 cache key and 0 now; a
+CI run with a committed cassette costs 0 calls and reproduces the recorded
+run exactly; with a simulated 10 ms per call `--jobs 8` was 7.9x faster than
+one at a time on the machine that wrote the file (timing varies by machine).
 
 ## Tests
 

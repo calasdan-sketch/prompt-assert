@@ -113,7 +113,7 @@ def template_problems(template: str, cases: list[dict]) -> list[str]:
     return problems
 
 
-CASE_KEYS = ("name", "input", "vars", "assert")
+CASE_KEYS = ("name", "input", "vars", "assert", "tags")
 #: At most this many problems are listed, so a file that is wrong everywhere
 #: does not flood a CI log.
 MAX_PROBLEMS = 20
@@ -171,6 +171,24 @@ def _check_case(case: dict, index: int) -> tuple[dict, str, list[str]]:
         problems.append(f"vars: must be a mapping of name to text, got "
                         f"{asserts.describe(declared)}")
 
+    tags: list[str] = []
+    if case.get("tags") is not None:
+        raw_tags = case["tags"]
+        if not isinstance(raw_tags, list):
+            raw_tags = [raw_tags]      # `tags: smoke` is one tag
+        for j, tag in enumerate(raw_tags):
+            try:
+                label_text = asserts.as_text(tag, f"tags[{j}]").strip()
+            except ValueError as e:
+                problems.append(str(e))
+                continue
+            if not re.fullmatch(r"[A-Za-z0-9_.:/-]+", label_text):
+                problems.append(
+                    f"tags[{j}]: {tag!r} is not a tag - use letters, digits "
+                    f"and _ . : / - only")
+            elif label_text not in tags:
+                tags.append(label_text)
+
     checked: list[dict] = []
     if "assert" in case:
         listed = case["assert"]
@@ -187,8 +205,11 @@ def _check_case(case: dict, index: int) -> tuple[dict, str, list[str]]:
                     checked.append(asserts.check(item))
                 except ValueError as e:
                     problems.append(f"assert[{j}]: {e}")
-    return ({"name": name, "input": text, "vars": variables,
-             "assert": checked}, label, problems)
+    working = {"name": name, "input": text, "vars": variables,
+               "assert": checked}
+    if tags:
+        working["tags"] = tags        # only when declared: nothing else moves
+    return (working, label, problems)
 
 
 def load_cases(root: str, name: str,
@@ -257,6 +278,19 @@ def cache_key(name: str, version: str, prompt_text: str,
     for part in (name, version, prompt_text, json_dumps(case), model,
                  base_url):
         h.update(part.encode())
+        h.update(b"\x00")
+    return h.hexdigest()[:32]
+
+
+def response_key(rendered: str, model: str, base_url: str = "") -> str:
+    """Cache key of one model call: exactly what determines the answer - the
+    text sent, the model and the endpoint. The case's assertions and name
+    are not part of it, so editing an assertion never pays for a call again
+    (cache_key above, which hashed the whole case, did)."""
+    h = hashlib.sha256()
+    h.update(b"response\x00")
+    for part in (rendered, model, base_url):
+        h.update(part.encode("utf-8", "surrogatepass"))
         h.update(b"\x00")
     return h.hexdigest()[:32]
 

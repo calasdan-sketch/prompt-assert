@@ -27,6 +27,12 @@ jobs:
         run: pip install git+https://github.com/calasdan-sketch/prompt-assert
       - name: Prompt regression tests (demo mode, fake model)
         run: prompt-assert --demo run --prompt sentiment --version v1
+      # Free, deterministic CI on your own prompts: record once on your
+      # machine (prompt-assert run --all --record), commit
+      # prompts/*.cassette.json, then replay it here. No model, no secrets,
+      # no cost; a prompt or input changed since recording is exit 2.
+      # - name: Prompt regression tests (replay)
+      #   run: prompt-assert run --all --replay --junit prompt-assert.xml --markdown "$GITHUB_STEP_SUMMARY"
       # Real model instead of the demo: every prompt x every version in one
       # go (exit 1 = a case failed, exit 2 = model unreachable / bad cases
       # file; the first unanswered case stops the run, --timeout caps each

@@ -1,0 +1,140 @@
+{
+ "cost": {
+  "calls_after_editing_one_assertion": {
+   "0.3.0 key (whole case)": 200,
+   "0.4.0 key (what is sent)": 0
+  },
+  "calls_in_ci_with_committed_cassette": 0,
+  "cases": 200,
+  "replay_reproduces_recorded_run_exactly": true,
+  "wall_clock_ms_per_call_simulated": 10,
+  "wall_clock_seconds_machine_dependent": {
+   "--jobs 1": 2.06,
+   "--jobs 8": 0.26,
+   "speedup": 7.9
+  }
+ },
+ "detection": {
+  "edits": {
+   "harmful": 25,
+   "harmless": 19
+  },
+  "format-only": {
+   "assertions_per_case": 2.7,
+   "caught": 21,
+   "false_alarm_edits": [],
+   "false_alarm_rate": 0.0,
+   "false_alarms": 0,
+   "missed": [
+    "drop reveal rule [leak]",
+    "soften reveal rule [leak]",
+    "paraphrase intro, drop reveal [leak]",
+    "rewrite intro, soften reveal [leak]"
+   ],
+   "of": 25,
+   "recall": 0.84
+  },
+  "label-only": {
+   "assertions_per_case": 1.0,
+   "caught": 0,
+   "false_alarm_edits": [],
+   "false_alarm_rate": 0.0,
+   "false_alarms": 0,
+   "missed": [
+    "drop one-word rule [format]",
+    "reply briefly [format]",
+    "ask for explanation [verbosity]",
+    "ask for JSON [format]",
+    "JSON in markdown [format]",
+    "drop untrusted rule [injection]",
+    "soften untrusted rule [injection]",
+    "drop reveal rule [leak]",
+    "soften reveal rule [leak]",
+    "drop both safety rules [injection]",
+    "add help link [link]",
+    "add docs link [link]",
+    "zero-width after paste [hidden]",
+    "zero-width in rule [hidden]",
+    "quote contact details [pii]",
+    "include author email [pii]",
+    "explain + link [combined]",
+    "json + drop reveal [combined]",
+    "explain + contact [combined]",
+    "link + zero-width [combined]",
+    "drop rules, brief [combined]",
+    "contact + drop untrusted [combined]",
+    "verbose + leak [combined]",
+    "paraphrase intro, drop reveal [leak]",
+    "rewrite intro, soften reveal [leak]"
+   ],
+   "of": 25,
+   "recall": 0.0
+  },
+  "security": {
+   "assertions_per_case": 7.7,
+   "caught": 25,
+   "false_alarm_edits": [],
+   "false_alarm_rate": 0.0,
+   "false_alarms": 0,
+   "missed": [],
+   "of": 25,
+   "recall": 1.0
+  },
+  "vocabulary": {
+   "assertions_per_case": 8.7,
+   "caught": 23,
+   "false_alarm_edits": [],
+   "false_alarm_rate": 0.0,
+   "false_alarms": 0,
+   "missed": [
+    "paraphrase intro, drop reveal [leak]",
+    "rewrite intro, soften reveal [leak]"
+   ],
+   "of": 25,
+   "recall": 0.92
+  }
+ },
+ "flakiness": {
+  "days": 300,
+  "model_flake_rate_per_call": 0.04,
+  "regression": "drops the 'never reveal' rule (the leak case then fails every call)",
+  "rows": [
+   {
+    "calls_per_run": 12.0,
+    "false_alarm_rate": 0.277,
+    "gate": "1 run",
+    "regression_detected": 1.0
+   },
+   {
+    "calls_per_run": 60.0,
+    "false_alarm_rate": 0.827,
+    "gate": "5 runs, all must pass",
+    "regression_detected": 1.0
+   },
+   {
+    "calls_per_run": 60.0,
+    "false_alarm_rate": 0.007,
+    "gate": "5 runs, 60% must pass",
+    "regression_detected": 1.0
+   },
+   {
+    "calls_per_run": 37.2,
+    "false_alarm_rate": 0.007,
+    "gate": "5 runs, 60%, --early-stop",
+    "regression_detected": 1.0
+   },
+   {
+    "calls_per_run": 60.0,
+    "false_alarm_rate": 0.123,
+    "gate": "5 runs, 80%",
+    "regression_detected": 1.0
+   },
+   {
+    "calls_per_run": 49.4,
+    "false_alarm_rate": 0.123,
+    "gate": "5 runs, 80%, --early-stop",
+    "regression_detected": 1.0
+   }
+  ]
+ }
+}

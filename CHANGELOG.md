@@ -1,5 +1,44 @@
 # Changelog
 
+## 0.4.0 (unreleased)
+Expert round 2. All 366 earlier tests pass; 2 were edited (below).
+- Cassettes: `run --record` writes `prompts/<name>.cassette.json`,
+  `run --replay` answers every call from it and contacts no model (needs no
+  URL or key); a missing recording, a missing or damaged cassette is exit 2.
+  Sorted, ASCII-escaped JSON, atomic write, 64 MiB cap; judge verdicts are
+  recorded; `--record` warns about secret-shaped replies.
+- Response cache key is now the text sent + model + endpoint, not the whole
+  case: editing an assertion, tag or case name no longer re-runs the model.
+  (Behaviour change; the cache is disposable.)
+- Security assertions: `no_pii` (email, phone, card and Canadian SIN with
+  Luhn, US SSN, optional IP), `no_secrets`, `no_hidden_chars`
+  (`emoji_ok`), `no_urls` (all, or an allow-list of domains),
+  `no_prompt_leak` (N-word runs of the prompt text, placeholders cut out).
+  Details never echo the matched value. `asserts.evaluate()` takes an
+  optional `template=`.
+- `prompt-assert corpus injection`: 25 original prompt-injection and leakage
+  cases (`--canary`, `--allow-domain`), tagged, plain ASCII.
+- `plan` (calls, cached/recorded, estimated input tokens; optional cost from
+  user-supplied prices) and budgets `--max-calls`, `--max-input-tokens`,
+  `--max-cost` that stop `run`/`diff` with exit 2 before the first request.
+- `--jobs N` (1-64) runs cases in parallel, results in case order.
+- `--early-stop` with `--repeat`: stop a case once its pass/fail is settled
+  (exact, not statistical). JSON adds `stopped_early`; `runs` is the number
+  made.
+- `tags:` on cases, `--tag` (repeatable); a tag nothing has is exit 2.
+- `run --all --changed-since REF` and `plan --changed-since REF`: only
+  suites whose prompt version, cases file or cassette changed in git.
+- `--markdown PATH` and `--github-annotations` reports; text from a model is
+  cleaned, annotations escape `%`, CR, LF, `:` and `,`.
+- `benchmarks/bench.py`: offline benchmark against a simulated model with a
+  committed `results.json` / `RESULTS.md`, checked by a test.
+- Tests: 366 -> 425 passed (`tests/test_expert2.py`, `tests/test_benchmark.py`).
+  Edited: `tests/test_round5_fixes.py` used `tags` as its example of an
+  unknown case key (it is now a key; uses `notes`);
+  `tests/test_packaging.py` version.
+- Not done: multi-turn and tool-call assertions, SARIF, a GitHub Action
+  wrapper, prompt-diff impact analysis (see README Limitations).
+
 ## 0.3.0 (unreleased)
 - `--repeat N` (run and diff): run each case N times; `--min-pass-rate RATE`
   (`0.8` or `80%`, default every run) says how many must pass. Cases that

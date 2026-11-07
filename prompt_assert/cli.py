@@ -8,6 +8,10 @@ diff versions A/B, and catch prompt drift before your users do.
   python3 -m prompt_assert run --all            # every prompt x every version
   python3 -m prompt_assert diff v1 v2 --prompt sentiment
   python3 -m prompt_assert list
+  python3 -m prompt_assert run --all --record   # once; commit prompts/*.cassette.json
+  python3 -m prompt_assert run --all --replay   # CI: no model, no cost
+  python3 -m prompt_assert plan --all           # calls a run would make
+  python3 -m prompt_assert corpus injection     # a starter attack/leak suite
 
 (--demo trials the suite against a built-in fake model; after
 `pip install .` the `prompt-assert` command is on your PATH.)
@@ -33,14 +37,20 @@ import os
 import sys
 import tempfile
 
+from . import cassette as cassette_mod
+from . import changed as changed_mod
+from . import corpus as corpus_mod
 from . import demo as demo_mod
 from . import junit as junit_mod
 from . import model as model_mod
+from . import plan as plan_mod
+from . import report as report_mod
 from . import runner as runner_mod
+from . import scan as scan_mod
 from . import suite as suite_mod
 from .textsafe import clean
 
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 
 
 def _harden_streams() -> None:
@@ -242,10 +252,11 @@ def _demo_root(args) -> str:
     otherwise scaffolds the example into a temp dir (removed when the
     command ends) so the trial works with zero setup."""
     prompts = suite_mod.list_prompts(args.root)
-    if args.cmd == "run" and getattr(args, "all", False) and prompts:
+    if args.cmd in ("run", "plan") and getattr(args, "all", False) \
+            and prompts:
         return args.root
     have = prompts.get(getattr(args, "prompt", None) or "", [])
-    if args.cmd == "run" and not getattr(args, "all", False) \
+    if args.cmd in ("run", "plan") and not getattr(args, "all", False) \
             and args.version in have:
         return args.root
     if args.cmd == "diff" and args.v1 in have and args.v2 in have:
@@ -300,8 +311,9 @@ def _print_run(name: str, version: str,
     print(f"{name}.{version}: {line}")
     failed = [r for r in results if not r.passed]
     for r in failed:
-        runs = (f" (passed {r.passes}/{r.runs} runs)"
-                if r.runs > 1 and not r.error else "")
+        runs = (f" (passed {r.passes}/{r.runs} runs"
+                + (", stopped early" if r.stopped_early else "") + ")"
+                if (r.runs > 1 or r.stopped_early) and not r.error else "")
         print(f"\n  FAIL {r.name}{runs}")
         if r.error:
             print(f"    error: {r.error}")
@@ -358,24 +370,174 @@ def _load_suites(root: str, names) -> dict | None:
     return loaded if usable else None
 
 
-def _run_or_error(root, name, version, args, cases=None):
+def _run_or_error(root, name, version, args, cases=None, tapes=None):
     """run_suite with the user-facing error contract: returns
     (results, None) or (None, exit code) after printing the error."""
     try:
         results, _ = runner_mod.run_suite(
             root, name, version, cases=cases, model_kw=_model_kw(args),
             use_cache=_use_cache(args), repeat=args.repeat,
-            min_pass_rate=args.min_pass_rate)
+            min_pass_rate=args.min_pass_rate, jobs=args.jobs,
+            early_stop=args.early_stop, tags=args.tag or None,
+            tape=(tapes or {}).get(name))
     except (OSError, ValueError) as e:
         print(f"error: {runner_mod.error_text(e)}", file=sys.stderr)
         return None, 2
     err = _first_error(results)
     if err:
-        # model down / rejected the call — report the real reason, don't
+        # model down / rejected the call - report the real reason, don't
         # pretend with an all-FAIL run
         print(f"error: {err}", file=sys.stderr)
         return None, 2
     return results, None
+
+
+def _check_run_options(args) -> bool:
+    """True after printing the error when the cassette, repeat and budget
+    flags contradict each other."""
+    problems = []
+    if args.record and args.replay:
+        problems.append("--record and --replay cannot be used together")
+    if (args.record or args.replay) and args.demo:
+        problems.append("--record / --replay need a real prompts folder and "
+                        "are not available with --demo (the fake model has "
+                        "nothing worth recording)")
+    if args.record and args.early_stop:
+        problems.append("--record with --early-stop would record only some "
+                        "of the runs; record without it")
+    if args.early_stop and args.repeat == 1:
+        problems.append("--early-stop needs --repeat N with N above 1")
+    if args.max_cost is not None and (
+            args.price_in is None or args.price_out is None
+            or args.assume_output_tokens is None):
+        problems.append("--max-cost needs --price-in, --price-out and "
+                        "--assume-output-tokens (per million tokens; none "
+                        "is built in)")
+    if (getattr(args, "github_annotations", False)
+            and getattr(args, "format", "human") == "json"):
+        problems.append("--github-annotations prints workflow commands, "
+                        "which would break --format json; use one or the "
+                        "other")
+    for problem in problems:
+        print(f"error: {problem}", file=sys.stderr)
+    return bool(problems)
+
+
+def _open_tapes(args, root, names):
+    """({name: Tape} or None when neither --record nor --replay, exit code)."""
+    if not (args.record or args.replay):
+        return None, 0
+    mode = "record" if args.record else "replay"
+    tapes = {}
+    for name in dict.fromkeys(names):
+        path = cassette_mod.cassette_path(root, name)
+        try:
+            tapes[name] = cassette_mod.Tape(path, mode)
+        except (cassette_mod.CassetteError, OSError) as e:
+            print(f"error: {runner_mod.error_text(e)}", file=sys.stderr)
+            return None, 2
+    return tapes, 0
+
+
+def _within_budget(args, root, targets, cases, tapes) -> bool:
+    """False after printing why when the run's plan is over a budget flag."""
+    if (args.max_calls is None and args.max_input_tokens is None
+            and args.max_cost is None):
+        return True
+    try:
+        plan = plan_mod.with_cost(
+            plan_mod.compute(root, targets, cases, _model_kw(args),
+                             _use_cache(args), args.repeat,
+                             tags=args.tag or None, tapes=tapes),
+            args.price_in, args.price_out, args.assume_output_tokens)
+    except (OSError, ValueError) as e:
+        print(f"error: {runner_mod.error_text(e)}", file=sys.stderr)
+        return False
+    over = plan_mod.violations(plan, args.max_calls, args.max_input_tokens,
+                               args.max_cost)
+    for problem in over:
+        print(f"error: over budget: {problem}; nothing was run",
+              file=sys.stderr)
+    return not over
+
+
+def _finish_tapes(args, tapes, full_run: bool) -> int:
+    """After a successful run: write the cassettes (record) or note
+    recordings nothing used (replay, full runs only). Exit code."""
+    if not tapes:
+        return 0
+    for name, tape in tapes.items():
+        if tape.mode == "record":
+            leaks = sorted({k for key, e in tape.responses.items()
+                            if key in tape.used
+                            for k in scan_mod.find_secrets(e["output"])})
+            if leaks:
+                print(f"warning: {tape.path}: a recorded reply looks like it "
+                      f"contains {', '.join(leaks)}; read the file before "
+                      "you commit it", file=sys.stderr)
+            try:
+                tape.save(prune=full_run)
+            except OSError as e:
+                print(f"error: cannot write the cassette: "
+                      f"{runner_mod.error_text(e)}", file=sys.stderr)
+                return 2
+            print(f"recorded {sum(1 for k in tape.responses if k in tape.used)}"
+                  f" answer(s) to {tape.path}", file=sys.stderr)
+        elif full_run and tape.stale():
+            print(f"note: {tape.path} holds {tape.stale()} recording(s) "
+                  "nothing used; `run --all --record` drops them",
+                  file=sys.stderr)
+    return 0
+
+
+def _select_targets(args, root, targets, cases):
+    """(targets, rc): drop suites with no case under --tag; when a --tag
+    leaves nothing at all, that is a usage error (a run of nothing must not
+    be green)."""
+    if not args.tag:
+        return targets, 0
+    kept = [(n, v) for n, v in targets
+            if runner_mod.select_cases(cases[n], args.tag)]
+    if not kept:
+        print(f"error: no case has the tag {', '.join(args.tag)} - nothing "
+              "to run", file=sys.stderr)
+        return None, 2
+    return kept, 0
+
+
+def _cases_path(root: str, name: str) -> str | None:
+    """The cases file as GitHub wants it in an annotation: relative to the
+    working directory, forward slashes; None when it lies outside it."""
+    try:
+        path = os.path.relpath(os.path.join(root, "prompts",
+                                            f"{name}.cases.yaml"))
+    except ValueError:          # another drive on Windows
+        return None
+    return None if path.startswith("..") else path.replace(os.sep, "/")
+
+
+def _write_reports(args, root, suites) -> int:
+    """The JUnit, Markdown and annotation outputs asked for. 0, or 2 when a
+    file cannot be written: a CI job must not go green without the file it
+    was told to expect."""
+    for what, path, write in (
+            ("JUnit", args.junit, lambda: junit_mod.write(args.junit,
+                                                          suites)),
+            ("Markdown", args.markdown, lambda: report_mod.write_atomic(
+                args.markdown, report_mod.markdown(suites)))):
+        if not path:
+            continue
+        try:
+            write()
+        except OSError as e:
+            print(f"error: cannot write the {what} report: "
+                  f"{runner_mod.error_text(e)}", file=sys.stderr)
+            return 2
+    if args.github_annotations:
+        for line in report_mod.annotations(
+                suites, lambda n: _cases_path(root, n)):
+            print(line)
+    return 0
 
 
 def cmd_run(args) -> int:
@@ -393,26 +555,47 @@ def cmd_run(args) -> int:
             return 2
     else:
         targets = [(args.prompt, args.version)]
-    if _bad_repeat_options(args):
+    if _bad_repeat_options(args) or _check_run_options(args):
         return 2
+    if args.changed_since:
+        if not args.all:
+            print("error: --changed-since goes with --all", file=sys.stderr)
+            return 2
+        try:
+            files = changed_mod.changed_files(root, args.changed_since)
+        except changed_mod.ChangedError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 2
+        targets = changed_mod.select(targets, files)
+        if not targets:
+            print(f"nothing to run: no prompt, cases file or cassette "
+                  f"changed since {args.changed_since}")
+            return _write_reports(args, root, [])
     cases = _load_suites(root, [name for name, _ in targets])
     if cases is None:
         return 2
+    targets, rc = _select_targets(args, root, targets, cases)
+    if targets is None:
+        return rc
+    tapes, rc = _open_tapes(args, root, [n for n, _ in targets])
+    if rc:
+        return rc
+    if not _within_budget(args, root, targets, cases, tapes):
+        return 2
     suites = []
     for name, version in targets:
-        results, rc = _run_or_error(root, name, version, args, cases[name])
+        results, rc = _run_or_error(root, name, version, args, cases[name],
+                                    tapes)
         if results is None:
             return rc
         suites.append((name, version, results))
-    if args.junit:
-        try:
-            junit_mod.write(args.junit, suites)
-        except OSError as e:
-            # asked for a report and unable to write it: a CI job must
-            # not go green without the file it was told to expect
-            print(f"error: cannot write the JUnit report: "
-                  f"{runner_mod.error_text(e)}", file=sys.stderr)
-            return 2
+    full = args.all and not args.tag and not args.changed_since
+    rc = _finish_tapes(args, tapes, full)
+    if rc:
+        return rc
+    rc = _write_reports(args, root, suites)
+    if rc:
+        return rc
     if args.format == "json":
         if not args.all:
             name, version, results = suites[0]
@@ -458,14 +641,31 @@ def _bad_repeat_options(args) -> bool:
 
 
 def cmd_diff(args) -> int:
-    if _bad_repeat_options(args):
+    if _bad_repeat_options(args) or _check_run_options(args):
         return 2
     root = _demo_root(args) if args.demo else args.root
-    r1, rc = _run_or_error(root, args.prompt, args.v1, args)
+    targets = [(args.prompt, args.v1), (args.prompt, args.v2)]
+    cases = _load_suites(root, [args.prompt])
+    if cases is None:
+        return 2
+    kept, rc = _select_targets(args, root, targets[:1], cases)
+    if kept is None:
+        return rc
+    tapes, rc = _open_tapes(args, root, [args.prompt])
+    if rc:
+        return rc
+    if not _within_budget(args, root, targets, cases, tapes):
+        return 2
+    r1, rc = _run_or_error(root, args.prompt, args.v1, args,
+                           cases[args.prompt], tapes)
     if r1 is None:
         return rc
-    r2, rc = _run_or_error(root, args.prompt, args.v2, args)
+    r2, rc = _run_or_error(root, args.prompt, args.v2, args,
+                           cases[args.prompt], tapes)
     if r2 is None:
+        return rc
+    rc = _finish_tapes(args, tapes, False)
+    if rc:
         return rc
     rows = []
     for a, b in zip(r1, r2):
@@ -500,6 +700,75 @@ def cmd_diff(args) -> int:
         print(f"{broke} case(s) regressed (pass -> FAIL): exit 1 "
               f"(--fail-on-regression)", file=sys.stderr)
     return status
+
+
+def cmd_plan(args) -> int:
+    """What a run would cost, without running it or contacting a model."""
+    if not args.all and not (args.prompt and args.version):
+        print("error: plan needs --prompt NAME --version vN, or --all",
+              file=sys.stderr)
+        return 2
+    if _bad_repeat_options(args) or _check_run_options(args):
+        return 2
+    root = _demo_root(args) if args.demo else args.root
+    if args.all:
+        targets = [(name, v) for name, versions in
+                   suite_mod.list_prompts(root).items() for v in versions]
+        if not targets:
+            print(f"error: no prompts found under {root}", file=sys.stderr)
+            return 2
+        if args.changed_since:
+            try:
+                targets = changed_mod.select(
+                    targets, changed_mod.changed_files(root,
+                                                       args.changed_since))
+            except changed_mod.ChangedError as e:
+                print(f"error: {e}", file=sys.stderr)
+                return 2
+    else:
+        targets = [(args.prompt, args.version)]
+    cases = _load_suites(root, [name for name, _ in targets])
+    if cases is None:
+        return 2
+    targets, rc = _select_targets(args, root, targets, cases)
+    if targets is None:
+        return rc
+    tapes, rc = _open_tapes(args, root, [n for n, _ in targets])
+    if rc:
+        return rc
+    try:
+        plan = plan_mod.with_cost(
+            plan_mod.compute(root, targets, cases, _model_kw(args),
+                             _use_cache(args), args.repeat,
+                             tags=args.tag or None, tapes=tapes),
+            args.price_in, args.price_out, args.assume_output_tokens)
+    except (OSError, ValueError) as e:
+        print(f"error: {runner_mod.error_text(e)}", file=sys.stderr)
+        return 2
+    if args.format == "json":
+        print(json.dumps(plan, indent=2))
+    else:
+        print(clean(plan_mod.render(plan)))
+    over = plan_mod.violations(plan, args.max_calls, args.max_input_tokens,
+                               args.max_cost)
+    for problem in over:
+        print(f"over budget: {problem}", file=sys.stderr)
+    # a replay that would miss a recording is as unusable as one over budget
+    missing = plan["totals"]["missing"]
+    if missing:
+        print(f"error: {missing} call(s) have no recording; "
+              "`run --record` would add them", file=sys.stderr)
+    return 2 if over or missing else 0
+
+
+def cmd_corpus(args) -> int:
+    try:
+        text = corpus_mod.injection_cases(args.canary, args.allow_domain)
+    except ValueError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    sys.stdout.write(text)
+    return 0
 
 
 def _diff_status(args, rows) -> int:
@@ -570,6 +839,52 @@ def _add_repeat_options(p: argparse.ArgumentParser) -> None:
                         "up: 0.8 of 5 runs is 4.")
 
 
+def _add_run_options(p: argparse.ArgumentParser) -> None:
+    """Options of every command that runs (or plans) cases."""
+    p.add_argument("--jobs", type=_flag(runner_mod.parse_jobs), default=1,
+                   metavar="N",
+                   help=f"Run N cases at once (default 1, at most "
+                        f"{runner_mod.MAX_JOBS}). Results keep case order; "
+                        "mind your provider's rate limit.")
+    p.add_argument("--early-stop", action="store_true",
+                   help="With --repeat: stop a case's runs as soon as its "
+                        "verdict is settled (same verdict, fewer calls; a "
+                        "late failure of a case already settled goes "
+                        "unseen).")
+    p.add_argument("--tag", action="append", default=None, metavar="TAG",
+                   help="Run only cases with this tag (repeat the flag for "
+                        "several: any match runs).")
+    p.add_argument("--record", action="store_true",
+                   help="Call the model and write the answers to "
+                        "prompts/<name>.cassette.json (commit it).")
+    p.add_argument("--replay", action="store_true",
+                   help="Answer every call from prompts/<name>.cassette.json "
+                        "and contact no model; a call with no recording is "
+                        "exit 2.")
+    p.add_argument("--max-calls", type=_flag(plan_mod.parse_count),
+                   default=None, metavar="N",
+                   help="Exit 2 before the first request if the run needs "
+                        "more than N live model calls.")
+    p.add_argument("--max-input-tokens", type=_flag(plan_mod.parse_count),
+                   default=None, metavar="N",
+                   help="Exit 2 before the first request if the live calls "
+                        "send more than about N tokens (1 per 4 characters).")
+    p.add_argument("--max-cost", type=_flag(plan_mod.parse_positive),
+                   default=None, metavar="AMOUNT",
+                   help="Exit 2 before the first request if the estimated "
+                        "cost is over AMOUNT; needs the three flags below.")
+    p.add_argument("--price-in", type=_flag(plan_mod.parse_positive),
+                   default=None, metavar="PER_MTOK",
+                   help="Your price per million input tokens (none is "
+                        "built in).")
+    p.add_argument("--price-out", type=_flag(plan_mod.parse_positive),
+                   default=None, metavar="PER_MTOK",
+                   help="Your price per million output tokens.")
+    p.add_argument("--assume-output-tokens", type=_flag(plan_mod.parse_count),
+                   default=None, metavar="N",
+                   help="Output tokens to assume per call, for the cost.")
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="prompt-assert", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -596,8 +911,48 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--junit", metavar="PATH",
                    help="Also write a JUnit XML report to PATH (for CI test "
                         "views). A report that cannot be written is exit 2.")
+    r.add_argument("--markdown", metavar="PATH",
+                   help="Also write a Markdown summary to PATH (a PR "
+                        "comment, or $GITHUB_STEP_SUMMARY).")
+    r.add_argument("--github-annotations", action="store_true",
+                   help="Print a GitHub Actions ::error line per failed "
+                        "case (not with --format json).")
+    r.add_argument("--changed-since", metavar="REF",
+                   help="With --all: run only the suites whose prompt "
+                        "version, cases file or cassette differs from the "
+                        "git revision REF.")
     _add_repeat_options(r)
+    _add_run_options(r)
     _add_model_options(r, on_subcommand=True)
+
+    pl = sub.add_parser(
+        "plan", help="Count the model calls (and estimate tokens and cost) "
+                     "a run would need, without running it.",
+        description="Reads the prompts, cases, cache and cassettes and "
+                    "reports how many live model calls `run` would make. "
+                    "Contacts no model. Exit 2 when over a budget flag or "
+                    "when a replay would miss a recording.")
+    pl.add_argument("--prompt")
+    pl.add_argument("--version")
+    pl.add_argument("--all", action="store_true")
+    pl.add_argument("--no-cache", action="store_true")
+    pl.add_argument("--format", choices=["human", "json"], default="human")
+    pl.add_argument("--changed-since", metavar="REF")
+    _add_repeat_options(pl)
+    _add_run_options(pl)
+    _add_model_options(pl, on_subcommand=True)
+
+    c = sub.add_parser(
+        "corpus", help="Print a starter prompt-injection case file.",
+        description=corpus_mod.__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    c.add_argument("name", choices=["injection"])
+    c.add_argument("--canary", default=corpus_mod.DEFAULT_CANARY,
+                   help="The harmless marker the attacks ask the model to "
+                        "print (default %(default)s).")
+    c.add_argument("--allow-domain", action="append", default=[],
+                   metavar="DOMAIN",
+                   help="A domain the reply may link to (default: no links).")
 
     d = sub.add_parser(
         "diff", help="A/B two versions on the same cases (exits 0 even when "
@@ -620,6 +975,7 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Exit 1 when a case passes on v1 and fails on v2 "
                         "(a FAIL -> pass flip never fails it).")
     _add_repeat_options(d)
+    _add_run_options(d)
     _add_model_options(d, on_subcommand=True)
     return p
 
@@ -656,7 +1012,7 @@ def main(argv=None) -> int:
                 args.timeout = model_mod.DEFAULT_TIMEOUT
             if args.max_reply_bytes is None:
                 args.max_reply_bytes = model_mod.DEFAULT_MAX_REPLY_BYTES
-        elif args.cmd in ("run", "diff"):
+        elif args.cmd in ("run", "diff") and not args.replay:
             # a key that cannot be sent, a limit that is not a number: a
             # configuration error. Say so before the first request, whether
             # or not the cache could have answered
@@ -669,8 +1025,9 @@ def main(argv=None) -> int:
                 return 2
         runner_mod.reset_cache_warnings()
         try:
-            return {"init": cmd_init, "list": cmd_list,
-                    "run": cmd_run, "diff": cmd_diff}[args.cmd](args)
+            return {"init": cmd_init, "list": cmd_list, "run": cmd_run,
+                    "diff": cmd_diff, "plan": cmd_plan,
+                    "corpus": cmd_corpus}[args.cmd](args)
         except OSError as e:
             # whatever file trouble nothing above handled (an unreadable
             # prompts folder ...): one line and exit 2, never a traceback
