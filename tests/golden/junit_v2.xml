@@ -1,0 +1,11 @@
+<?xml version='1.0' encoding='utf-8'?>
+<testsuites name="prompt-assert" tests="3" failures="1" errors="0" time="T">
+  <testsuite name="sentiment.v2" tests="3" failures="1" errors="0" skipped="0" time="T">
+    <testcase classname="sentiment.v2" name="angry review" time="T" />
+    <testcase classname="sentiment.v2" name="happy review" time="T" />
+    <testcase classname="sentiment.v2" name="neutral review" time="T">
+      <failure message="~26 tokens (max 10)" type="AssertionError">{'max_tokens': 10} -&gt; ~26 tokens (max 10)
+output: I'd call this one neutral, leaning slightly positive: the customer seems satisfied but not enthusiastic.</failure>
+    </testcase>
+  </testsuite>
+</testsuites>

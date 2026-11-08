@@ -56,6 +56,13 @@ _FLOAT_RE = re.compile(r"[-+]?(?:[0-9]+\.[0-9]*|\.[0-9]+|[0-9]+(?=[eE]))"
 MAX_DEPTH = 50
 
 
+# YAML's only blanks are the space and the tab. str.strip() also removes a
+# no-break space, an em space, U+3000 ... which silently changed a value such
+# as `equals: "x"` written with a trailing no-break space (found by comparing
+# with PyYAML, round 5).
+_WS = " \t"
+
+
 def _err(msg: str, lineno: int) -> ValueError:
     return ValueError(f"miniyaml: {msg} (line {lineno})")
 
@@ -258,7 +265,7 @@ class _Block:
 
 
 def _scalar(s: str, lineno: int):
-    s = s.strip()
+    s = s.strip(_WS)
     if s.startswith(_BLOCK_TAG):      # our own placeholder (see safe_load)
         return _Block(int(s[len(_BLOCK_TAG):]))
     if len(s) >= 2 and s[0] == s[-1] and s[0] in "\"'":
@@ -315,7 +322,7 @@ def _check_value(val: str, lineno: int, in_flow: bool = False):
     Anchors (&), aliases (*), and tags (!) are named explicitly so a
     config using them fails loudly instead of silently dropping content.
     """
-    v = val.strip()
+    v = val.strip(_WS)
     if not v:
         return
     c0 = v[0]
@@ -349,7 +356,7 @@ def _check_value(val: str, lineno: int, in_flow: bool = False):
 
 def _flow_list(s: str, lineno: int) -> list:
     """Parse [a, b, "c"] — scalars only."""
-    inner = s.strip()[1:-1].strip()
+    inner = s.strip(_WS)[1:-1].strip(_WS)
     if not inner:
         return []
     # a quote opens a quoted item only at the start of an item
@@ -405,16 +412,16 @@ def _block_scalar(raw_lines, i, parent_indent, style, chomp):
         # block scalar (PyYAML keeps them), and a whitespace-only line is
         # an empty line, never the end of the block.
         ln = raw_lines[i].rstrip("\r\n")
-        if ln.strip() and len(ln) - len(ln.lstrip(" ")) <= parent_indent:
+        if ln.strip(_WS) and len(ln) - len(ln.lstrip(" ")) <= parent_indent:
             break
         body.append(ln)
         i += 1
-    content = [ln for ln in body if ln.strip()]
+    content = [ln for ln in body if ln.strip(_WS)]
     ind = min((len(ln) - len(ln.lstrip(" ")) for ln in content[:1]),
               default=0)
     lines = []
     for k, ln in enumerate(body):
-        if ln.strip() and len(ln) - len(ln.lstrip(" ")) < ind:
+        if ln.strip(_WS) and len(ln) - len(ln.lstrip(" ")) < ind:
             raise _err("block scalar line is less indented than its first "
                        "line", i - len(body) + k + 1)
         lines.append(ln[ind:])
@@ -451,13 +458,13 @@ def safe_load(text: str):
         raw = raw_lines[i]
         i += 1
         lineno = i
-        line = _strip_comment(raw).rstrip()
-        if not line.strip():
+        line = _strip_comment(raw).rstrip(_WS)
+        if not line.strip(_WS):
             continue
-        if "\t" in line[: len(line) - len(line.lstrip())]:
+        if "\t" in line[: len(line) - len(line.lstrip(_WS))]:
             raise _err("tabs not allowed for indentation", lineno)
         indent = len(line) - len(line.lstrip(" "))
-        content = line.strip()
+        content = line.strip(_WS)
         if content in ("---", "..."):
             continue
         m = _BLOCK_RE.match(content)
@@ -515,8 +522,8 @@ def _parse_map(items, pos, indent, depth):
                 raise _err("quoted keys are not supported - write the key "
                            f"without quotes: {line!r}", lineno)
             raise _err(f"expected 'key: value', got: {line!r}", lineno)
-        key = m.group(1).strip()
-        rest = line[m.end():].strip()
+        key = m.group(1).strip(_WS)
+        rest = line[m.end():].strip(_WS)
         pos += 1
         if key in d:
             raise _err(f"duplicate key: {key!r}", lineno)
@@ -552,7 +559,7 @@ def _parse_list(items, pos, indent, depth):
             raise _err(f"bad indentation: {line!r}", lineno)
         if not _is_item(line):
             break  # end of list; parent map continues
-        content = line[1:].strip()
+        content = line[1:].strip(_WS)
         pos += 1
         if not content:
             if pos < len(items) and items[pos][1] > indent:

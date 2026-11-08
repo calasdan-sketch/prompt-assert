@@ -1,0 +1,13 @@
+{
+  "prompts": [
+    {
+      "name": "sentiment",
+      "versions": [
+        "v1",
+        "v2"
+      ],
+      "cases": 3,
+      "status": "ok"
+    }
+  ]
+}

@@ -224,7 +224,7 @@ assertion fails that case with `bad assertion: ...`, it never crashes the run.
 
 `contains` · `not_contains` · `icontains` · `equals` · `not_equals` ·
 `contains_any` · `contains_all` · `regex` · `not_regex` · `starts_with` ·
-`ends_with` · `json_valid` · `schema` · `contains_json` · `max_tokens` ·
+`ends_with` · `json_valid` · `schema` · `contains_json` · `is_xml` · `max_tokens` ·
 `min_tokens` · `max_chars` · `min_chars` · `max_words` · `min_words` ·
 `max_lines` · `not` (any of them turned around), and the
 [security assertions](#security-assertions-and-the-injection-corpus)
@@ -265,6 +265,12 @@ assert:
   first 64 `{` or `[` are tried). `contains_json: {schema}` also checks the
   first one found against the schema. Models like to answer "Sure! Here it is:"
   and a fence, and `json_valid` fails that.
+- `is_xml: true` wants a reply that is one well-formed XML document and
+  nothing else (surrounding whitespace is fine; a code fence or a sentence is
+  not); `is_xml: false` wants one that is not. It checks that the tags close
+  and nest, not any schema. A reply with a `<!DOCTYPE` or `<!ENTITY`
+  declaration fails, because entity expansion is how a short reply becomes
+  gigabytes. Useful for prompts that ask for `<answer>...</answer>` tags.
 - `not: {assertion}` turns any deterministic assertion around:
   `not: {regex: "(?i)as an ai"}`, `not: {no_urls: true}`. It cannot wrap a
   `judge` (a model's opinion) or another `not`.
@@ -649,6 +655,27 @@ sentiment.v2  2/3  FAIL
 A single version is `prompt-assert run --prompt sentiment --version v2`.
 `--format json` lists every suite with its cases.
 
+### GitHub Action
+
+The repository root is a composite action (`action.yml`). Once 0.4.0 is on
+PyPI:
+
+```yaml
+- uses: actions/checkout@v4
+- uses: calasdan-sketch/prompt-assert@<a tag or commit you have read>
+  with:
+    version: "0.4.0"                # required; the release to install
+    command: run --all --replay     # the default: no model, no cost
+```
+
+It installs that release from PyPI, runs the command in `working-directory`
+(default: the repository root), and for a `run` command adds
+`--github-annotations` and writes the table to the job summary, unless your
+command already chose `--format`, `--markdown` or `--github-annotations`
+(`summary: "false"` turns the additions off). Exit codes are prompt-assert's
+own. It has not been run on GitHub from this repository's tests: they run
+its shell script with a stand-in Python and read its structure.
+
 ### JUnit report
 
 ```bash
@@ -775,7 +802,7 @@ not that the tool lacks it. Where they do more, it says so.
 |---|---|---|---|---|
 | Install | `pip`, Python stdlib only, no dependencies | Node.js CLI (`npx promptfoo@latest`) | `pip install deepeval` | `pip install inspect-ai` |
 | Usage telemetry | none: the only network calls go to the model endpoint you set | on by default, [`PROMPTFOO_DISABLE_TELEMETRY=1`](https://www.promptfoo.dev/docs/configuration/telemetry/) turns it off | on by default, [`DEEPEVAL_TELEMETRY_OPT_OUT=1`](https://deepeval.com/docs/faq) turns it off | not checked |
-| LLM-free assertions | 27 kinds (above), 5 of them security heuristics, `not` on any of them | [many more](https://www.promptfoo.dev/docs/configuration/expected-outputs/) (checked 2026-11-07): `equals`, `is-json` and `contains-json` (both with an optional JSON schema), `is-sql`, `is-xml`, `is-html`, `is-refusal`, ROUGE/BLEU, `levenshtein`, `latency`, `cost`, custom JS/Python, `not-` on any type ... | mostly LLM-judged metrics (40+); judge defaults to OpenAI unless you configure one ([FAQ](https://deepeval.com/docs/faq)) | built-in scorers incl. text match and model grading |
+| LLM-free assertions | 28 kinds (above), 5 of them security heuristics, `not` on any of them | [many more](https://www.promptfoo.dev/docs/configuration/expected-outputs/) (checked 2026-11-07): `equals`, `is-json` and `contains-json` (both with an optional JSON schema), `is-sql`, `is-xml`, `is-html`, `is-refusal`, ROUGE/BLEU, `levenshtein`, `latency`, `cost`, custom JS/Python, `not-` on any type ... | mostly LLM-judged metrics (40+); judge defaults to OpenAI unless you configure one ([FAQ](https://deepeval.com/docs/faq)) | built-in scorers incl. text match and model grading |
 | Install size, measured 2026-11-07 | about 0.3 MB, 2 s, no dependencies | `npm install promptfoo` 0.125.1 (MIT): 26 s, 734 MB, 413 packages in `node_modules` | `pip install deepeval` 4.3.3: 13 s, 105 MB, 66 distributions | wheel 0.3.288 alone is 35 MB with 40 required dependencies (`pip download --no-deps`; full install not measured) |
 | Answers committed to git and replayed in CI | yes: `--record` / `--replay` ([above](#ci-that-costs-nothing-cassettes)); a miss is exit 2 | local on-disk [cache](https://www.promptfoo.dev/docs/configuration/caching/); a committed replay mode was not found in its docs (unverified) | not checked | not checked |
 | Know the cost first | `plan`, `--max-calls` / `--max-input-tokens` / `--max-cost` stop before the first request | not checked | not checked | not checked |
@@ -851,4 +878,4 @@ and in temporary directories, with no API spend.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT, copyright 2026 Calas Automations Inc. — see [LICENSE](LICENSE).

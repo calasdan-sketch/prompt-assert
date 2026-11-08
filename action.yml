@@ -1,0 +1,77 @@
+# GitHub Action: run prompt-assert in a workflow.
+#
+#   - uses: actions/checkout@v4
+#   - uses: calasdan-sketch/prompt-assert@<a tag or commit you have read>
+#     with:
+#       version: "0.4.0"          # the PyPI release to install (required)
+#       command: run --all --replay
+#
+# It installs the pinned release from PyPI, runs the command in your
+# project folder, prints a failed case as an annotation and writes the
+# summary table to the job summary. Exit codes are prompt-assert's own:
+# 0 passed, 1 a case failed, 2 could not run. It calls no model unless the
+# command you give needs one; the default replays a committed cassette.
+name: prompt-assert
+description: Regression-test prompts against golden cases in CI (replays a committed cassette by default, so no model and no cost).
+author: Calas Automations Inc.
+branding:
+  icon: check-circle
+  color: blue
+inputs:
+  version:
+    description: The prompt-assert release to install from PyPI, for example 0.4.0. Pin it, so a later release cannot change your CI.
+    required: true
+  command:
+    description: What to run, without the program name.
+    required: false
+    default: run --all --replay
+  working-directory:
+    description: The folder that holds prompts/ (relative to the repository).
+    required: false
+    default: .
+  python-version:
+    description: Python to run it with (3.10 or later).
+    required: false
+    default: "3.12"
+  summary:
+    description: "With a run command, also write the summary table to the job summary (true or false)."
+    required: false
+    default: "true"
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+    - name: Run prompt-assert
+      shell: bash
+      env:
+        PA_VERSION: ${{ inputs.version }}
+        PA_COMMAND: ${{ inputs.command }}
+        PA_DIR: ${{ inputs.working-directory }}
+        PA_SUMMARY: ${{ inputs.summary }}
+      run: |
+        set -eu
+        # inputs reach the shell as environment variables, never pasted into
+        # the script text, and the version must look like a version
+        case "$PA_VERSION" in
+          ""|*[!0-9.]*|.*|*..*|*.) echo "error: version must look like 0.4.0, got: $PA_VERSION" >&2; exit 2;;
+        esac
+        python -m pip install --disable-pip-version-check --quiet "prompt-assert==$PA_VERSION"
+        cd "$PA_DIR"
+        set -f
+        # shellcheck disable=SC2086
+        set -- $PA_COMMAND
+        if [ "$#" -eq 0 ]; then echo "error: command is empty" >&2; exit 2; fi
+        if [ "$1" = "run" ] && [ "$PA_SUMMARY" = "true" ]; then
+          # leave the output flags alone when the command already chose its own
+          own=no
+          for a in "$@"; do
+            case "$a" in --format|--format=*|--github-annotations|--markdown|--markdown=*) own=yes;; esac
+          done
+          if [ "$own" = "no" ]; then
+            set -- "$@" --github-annotations
+            if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then set -- "$@" --markdown "$GITHUB_STEP_SUMMARY"; fi
+          fi
+        fi
+        exec python -m prompt_assert "$@"

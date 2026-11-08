@@ -1,0 +1,63 @@
+{
+  "prompt": "sentiment",
+  "version": "v2",
+  "passed": 2,
+  "failed": 1,
+  "cases": [
+    {
+      "name": "angry review",
+      "passed": true,
+      "output": "negative",
+      "cached": false,
+      "error": "",
+      "assertions": [
+        {
+          "assertion": {
+            "contains": "negative"
+          },
+          "passed": true,
+          "detail": "contains 'negative'"
+        }
+      ]
+    },
+    {
+      "name": "happy review",
+      "passed": true,
+      "output": "positive",
+      "cached": false,
+      "error": "",
+      "assertions": [
+        {
+          "assertion": {
+            "contains": "positive"
+          },
+          "passed": true,
+          "detail": "contains 'positive'"
+        }
+      ]
+    },
+    {
+      "name": "neutral review",
+      "passed": false,
+      "output": "I'd call this one neutral, leaning slightly positive: the customer seems satisfied but not enthusiastic.",
+      "cached": false,
+      "error": "",
+      "assertions": [
+        {
+          "assertion": {
+            "regex": "(?i)\\bpositive\\b|\\bnegative\\b|\\bneutral\\b"
+          },
+          "passed": true,
+          "detail": "matches /(?i)\\bpositive\\b|\\bnegative\\b|\\bneutral\\b/"
+        },
+        {
+          "assertion": {
+            "max_tokens": 10
+          },
+          "passed": false,
+          "detail": "~26 tokens (max 10)"
+        }
+      ]
+    }
+  ]
+}

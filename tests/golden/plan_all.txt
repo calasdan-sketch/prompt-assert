@@ -1,0 +1,5 @@
+suite         cases  runs  live  answered  missing  ~input tokens
+sentiment.v1      3     3     3         0        0            114
+sentiment.v2      3     3     3         0        0            129
+
+6 live model call(s), 0 answered from a cassette or the cache; about 243 input tokens (estimate, one per 4 characters)

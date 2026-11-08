@@ -1,4 +1,4 @@
-# Publish checklist for prompt-assert (for Dan; nothing here was run)
+# Publish checklist for prompt-assert (for Dan; nothing here was run; refreshed in round 5)
 
 ## Version to release
 
@@ -14,9 +14,14 @@ number is already 0.4.0 everywhere; do not change it.
    It has never run on Windows or with the `package` job. If something is red,
    do not publish; send me the log.
 2. The author in the package is "Calas Automations Inc." (same as the
-   LICENSE). If you want a different name, change `authors` in
-   `pyproject.toml` and the first line of `LICENSE` now: it becomes public.
-3. Skim the top of `CHANGELOG.md` and `README.md` once.
+   LICENSE, no email). If you want a different name, change `authors` in
+   `pyproject.toml`, the `LICENSE` copyright line, `__author__` in
+   `prompt_assert/__init__.py` and `author:` in `action.yml` now: it becomes
+   public. If the GitHub repository is private, delete the three `[project.urls]`
+   lines in `pyproject.toml` first (I could not check from here).
+3. Skim the top of `CHANGELOG.md` and `README.md` once. Round 5 added a
+   GitHub Action (`action.yml`), the `is_xml` check and a fix for the cases
+   file reader; `docs/ROUND5.md` lists what was and was not tested.
 
 ## Commands (on your own machine, in the repository folder)
 
@@ -43,7 +48,10 @@ python -m twine upload dist/*               # asks for your PyPI token
    to do if `--version` says 0.2.0), in `CHANGELOG.md` change
    "0.4.0 (unreleased)" to "0.4.0" with the date, commit, and tag `v0.4.0`.
    `examples/prompt-assert-example.yml` pins 0.4.0 and only works after the
-   upload, so do not point anyone at it before then.
+   upload, so do not point anyone at it before then. The GitHub Action in
+   `action.yml` also installs 0.4.0 from PyPI: after the upload, add a test
+   workflow with `uses: ./` and `version: "0.4.0"` and check it goes green
+   before telling anyone to use it.
 
 ## Cost
 

@@ -8,3 +8,6 @@ include CHANGELOG.md
 recursive-include tests *.py
 # the offline benchmark travels with the source (its test skips without it)
 recursive-include benchmarks *.py *.md *.json
+# round 5: the GitHub Action and the golden output files the tests compare with
+include action.yml
+recursive-include tests/golden *

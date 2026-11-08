@@ -1,0 +1,7 @@
+sentiment.v2: ..F
+
+  FAIL neutral review
+    ✗ {'max_tokens': 10} -> ~26 tokens (max 10)
+    output: "I'd call this one neutral, leaning slightly positive: the customer seems satisfied but not enthusiastic."
+
+2/3 passed

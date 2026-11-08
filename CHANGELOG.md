@@ -2,6 +2,35 @@
 
 ## 0.4.0 (unreleased)
 
+### Expert round 5 (specialists: prompt engineer, LLM-eval engineer, QA lead, CI integrator; on top of round 4, below)
+Tests 495 -> 521. Review notes with the command behind each finding: `docs/ROUND5.md`. No version bump: 0.4.0 is
+still unreleased (PyPI has 0.2.0).
+- Author line: "Calas Automations Inc." in `pyproject.toml`, `LICENSE`, the README
+  licence line, `prompt_assert.__author__` and `action.yml`; no email is
+  declared (none existed). A test pins it and the built wheel's `METADATA`
+  was checked (see ROUND5.md).
+- Fix: the cases-file reader removed a no-break space (and other Unicode
+  spaces) from the edges of an unquoted value or a `[a, b]` list item, so
+  `input: ok<no-break space>` silently sent `ok`; a line holding only such a
+  space was skipped as blank. (Quoted values were already kept.) YAML's blanks
+  are the space and the tab, and now only those are trimmed; a line of only a
+  no-break space is a line-numbered error. Found by comparing the reader with
+  PyYAML on 4,000 random documents.
+- New assertion `is_xml: true|false`: one well-formed XML document, nothing
+  else; a `<!DOCTYPE` or `<!ENTITY` declaration fails (entity expansion).
+- New `action.yml`: a composite GitHub Action (`uses: calasdan-sketch/prompt-assert@<tag>`)
+  that installs a pinned release, runs your command, and adds annotations and
+  the job summary. Inputs reach the shell as environment variables; the
+  version must look like a version. Not run on GitHub from here.
+- Tests: golden files (`tests/golden/`) for the human, JSON, JUnit, Markdown,
+  annotation, `list`, `plan --all`, `diff` and corpus outputs; seeded property
+  tests over every assertion; a PyYAML cross-check (runs only if PyYAML is
+  installed).
+- Changed behaviour: unquoted values with a leading or trailing no-break
+  space (or other non-ASCII space) in a cases file now keep it; before, it was
+  dropped.
+- Not done: see the idea table in `docs/ROUND5.md`.
+
 ### Expert round 4 (what a stranger gets from `pip install`; on top of rounds 3 and 2, below)
 Tests 471 -> 495. Review notes with the command behind each finding: `docs/ROUND4.md`. No
 version bump: 0.4.0 is still unreleased (PyPI has 0.2.0), so this is one

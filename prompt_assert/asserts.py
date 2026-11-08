@@ -53,6 +53,7 @@ from __future__ import annotations
 import difflib
 import json
 import re
+import xml.etree.ElementTree as ET
 
 from . import miniyaml, scan
 
@@ -91,6 +92,22 @@ def parse_json(text: str):
 
 
 #: contains_json looks at this many starting points ({ or [) at most.
+def xml_problem(text: str) -> str | None:
+    """None when `text` is one well-formed XML document, else why not. A
+    document type declaration (<!DOCTYPE, <!ENTITY) is refused outright:
+    entity expansion is how a small reply becomes gigabytes."""
+    body = text.strip()
+    if not body:
+        return "the reply is empty"
+    if "<!DOCTYPE" in body.upper() or "<!ENTITY" in body.upper():
+        return "a DOCTYPE or ENTITY declaration is not accepted"
+    try:
+        ET.fromstring(body)
+    except (ET.ParseError, ValueError, RecursionError) as e:
+        return str(e).splitlines()[0][:200] or "parse error"
+    return None
+
+
 JSON_CANDIDATES = 64
 _FENCE = re.compile(r"```[ \t]*([A-Za-z0-9_-]*)[ \t]*\r?\n(.*?)```", re.DOTALL)
 
@@ -410,7 +427,8 @@ COUNT_KINDS = ("max_tokens", "min_tokens", "max_chars", "min_chars",
 #: decides all the others itself.
 SECURITY_KINDS = ("no_pii", "no_secrets", "no_hidden_chars", "no_urls",
                   "no_prompt_leak")
-KINDS = (TEXT_KINDS + LIST_KINDS + ("json_valid", "schema", "contains_json")
+KINDS = (TEXT_KINDS + LIST_KINDS + ("json_valid", "schema", "contains_json",
+                                    "is_xml")
          + COUNT_KINDS + SECURITY_KINDS + ("not", "judge"))
 #: no_prompt_leak: words in a run, and the bounds on a value given.
 LEAK_DEFAULT = 8
@@ -695,7 +713,7 @@ def check(assertion) -> dict:
         return {kind: _texts(kind, want)}
     if kind in COUNT_KINDS:
         return {kind: _count(kind, want)}
-    if kind == "json_valid":
+    if kind in ("json_valid", "is_xml"):
         return {kind: _flag(kind, want)}
     if kind == "schema":
         want = _schema_operand(kind, want)
@@ -832,6 +850,15 @@ def evaluate(assertion: dict, output: str,
         return (True, "not JSON, as required") if problem is not None else \
             (False, ("valid JSON, but json_valid: false asks for text that "
                      "is not"))
+    if kind == "is_xml":
+        wanted = _flag(kind, want)
+        problem = xml_problem(output)
+        if wanted:
+            return (True, "well-formed XML") if problem is None else \
+                (False, f"not well-formed XML: {problem}")
+        return (True, "not XML, as required") if problem is not None else \
+            (False, "well-formed XML, but is_xml: false asks for text that "
+                    "is not")
     if kind == "schema":
         check_schema(want)
         try:
